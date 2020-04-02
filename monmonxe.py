@@ -29,6 +29,7 @@ Helpful Stuff:
 import time
 import datetime
 import subprocess
+import argparse
 import numpy as np
 import os
 
@@ -301,7 +302,7 @@ def control_sleep_and_led(input_sleeptime=sleeptime, prozessabbild_binary_string
 
 
 # This is the main function used to retrieve the readings from the 'Prozessabbild' of the RevPi.
-def monmonxe(
+def monmonxe_main(
     input_sensor_list = sensor_list,
     input_path_sensor_outputs = path_sensor_outputs,
     input_sleeptime = sleeptime
@@ -376,6 +377,42 @@ def monmonxe(
 
 # loading a list containing 
 if __name__=="__main__":
-    monmonxe()
+
+    # processing the input given when this file is executed
+    parser = argparse.ArgumentParser(description='Initialize MonXe measurement and slow control.')
+    parser.add_argument('-r', '--runmode', dest='runmode', type=str, required=False, default="slow_control")
+    runmode = parser.parse_args().runmode
+
+    # case 1: running the slow control (default)
+    if runmode in ["slow_control", "run_slow_control", "sc"]:
+        monmonxe_main()
+
+    # case 2: initializing a new measurement
+    elif runmode in ["i", "in", "init", "initialize", "initialise"]:
+        
+
+    # case 3: finishing the current measurement
+    elif runmode in ["f", "finish", "finished", "final", "fin"]:
+        
+
+    # case 4: invalid input
+    else:
+        print("That's falsch!")
+        print("It's not working.")
+        print("It should...")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
