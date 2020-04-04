@@ -44,22 +44,20 @@ import os
 sleeptime = 1
 
 
-# ip addresses
-ip_revpi_c3 = "pi@10.42.0.187"
-ip_lptp = "monxe@"
-
-
-# paths within the readout laptop (lptp)
+# configuring the readout machine (currently 'lptp')
+ip_readout_machine = "monxe@"
 path_measurement_data = "/home/monxe/Desktop/measurement_data/" # folder within the measurement data is stored (each measurement corresponds to one subfolder)
-
+path_temp_folder = path_measurement_data +"temp/"
 
 # paths within the slow control machine (revpi_c3)
+ip_slow_control_machine = "pi@10.42.0.187"
 path_monmonxe_folder = "/home/pi/monmonxe/" # folder within which the slow control files are stored
 path_prozessabbild_binary = "/dev/piControl0" # 'Prozessabbild' binary file within the RevPi root file system
 path_sensor_outputs = "/home/pi/monmonxe/sensor_readings/" # folder within which the sensor output files are stored
 
 
-# led addresses
+# miscellaneous definitions
+slow_control_db_file_name = "monmonxe_slow_control_data.db"
 led_offset = 6
 
 
@@ -262,7 +260,7 @@ def get_sensor_csv_file(sensor, savefolderstring=path_sensor_outputs):
                         pass
                     else:
                         file_header_line = line
-                        print("file_header_line: {}".format(file_header_line))
+                        #print("file_header_line: {}".format(file_header_line))
                         break
                 ### case 2: corresponding file exists
                 if file_header_line == sensor_header_line:
@@ -316,27 +314,110 @@ def control_sleep_and_led(input_sleeptime=sleeptime, prozessabbild_binary_string
 # The corresponding folders are created and the monmonxe_main() function is executed on 'revpi_c3' within a detached screen.
 def monmonxe_init(
     measurement_data = path_measurement_data,
-    slow_control_machine_address = ip_revpi_c3
+    slow_control_machine_address = ip_slow_control_machine,
+    slow_control_machine_path_to_monmonxe_py = path_monmonxe_folder
 ):
+    ### initializing
+    print("\n\n\n#########################################################")
+    print("### monmonxe_init: initializing a new measurement")
+    print("#########################################################\n\n\n")
+
+    ### generating the folder structure on the readout machine
+    print("#############################################")
+    print("### monmonxe_init: creating new measurement folder")
+    datestamp = datestring()
+    print("Today's datestamp is {}.".format(datestamp))
+    print("Your hair looks especially astonishing today!")
+    foldername = input("How would you like to name the new measurement?\n")
+    print("#############################################\n")
+    folderstring = measurement_data +datestamp +"__" +foldername
+    subprocess.call("mkdir {}".format(folderstring), shell=True)
+    print("#############################################")
+    print("### monmonxe_init: created folder {}:{}".format(slow_control_machine_address, folderstring))
+    print("#############################################\n")
+
+    ### executing 'monmonxe.py' via ssh in a detached screen 
+    subprocess.call("ssh {} screen -Sdm monmonxe python3 {}monmonxe.py".format(slow_control_machine_address, slow_control_machine_path_to_monmonxe_py), shell=True)
+    print("#############################################")
+    print("### monmonxe_init: 'monmonxe.py' started on {}".format(slow_control_machine_address))
+    print("#############################################\n")
+
+    ### end of program
+    print("\n\n#########################################################")
+    print("### monmonxe_init: new measurement initialized")
+    print("#########################################################\n\n\n")
     return
 
 
 # This is the main function used to display the sensor readings from the currently running slow control session.
 def monmonxe_display(
-    measurement_data = path_measurement_data,
-    slow_control_machine_ip_address = ip_revpi_c3,
-    slow_control_machine_monmonxe_folder = path_monmonxe_folder
+    temp_filestring = path_temp_folder,
+    slow_control_machine_ip_address = ip_slow_control_machine,
+    slow_control_machine_monmonxe_folder = path_monmonxe_folder,
+    slow_control_data_filename = slow_control_db_file_name
 ):
-    return
+    ### initializing
+    print("\n\n\n#########################################################")
+    print("### monmonxe_display: displaying the current slow control measurement")
+    print("#########################################################\n\n\n")
+
+    ### repetedly get the current slow control data and print the latest values
+    try:
+        while True:
+            subprocess.call("scp {}:{}{} {}{}".format(slow_control_machine_ip_address, slow_control_machine_monmonxe_folder, slow_control_data_filename, temp_filestring, slow_control_data_filename), shell=True)
+            print("#############################################")
+            print("### monmonxe_display: retrieved current slow control data:")
+            print("#############################################\n")
+
+    ### end of program: clearing the temp folder
+    # keyboard interrupt
+    except (KeyboardInterrupt, SystemExit):
+        print("###########################################")
+        print("### monmonxe_display: stopped vie keyboard interrupt")
+        print("#############################################\n")
+    # catching any other exceptions
+    except:
+        # turning off the control LED
+        print("#############################################")
+        print("### monmonxe_display: AN ERROR OCCURRED)
+        print("#############################################\n")
+    finally:
+        subprocess.call("rm -r {}*".format(temp_filestring), shell=True)
+        print("#############################################")
+        print("### monmonxe_display: cleared {}".format(temp_filestring))
+        print("#############################################\n")
+        print("\n\n#########################################################")
+        print("### monmonxe_display: finished")
+        print("#########################################################\n\n\n")
+        return
 
 
 # This is the main function used to finish both the running slow control session and also the current measurement
 # by copying the slow control data from the slow control machine into the measurement data folder, syncing the measurement data folders and deleting the slow control data from the sc machine.
 def monmonxe_finish(
-    measurement_data = path_measurement_data,
-    slow_control_machine_ip_address = ip_revpi_c3,
-    slow_control_machine_monmonxe_folder = path_monmonxe_folder
+    readout_machine_path_to_measurement_data = path_measurement_data,
+    slow_control_machine_ip_address = ip_slow_control_machine,
+    slow_control_machine_monmonxe_folder = path_monmonxe_folder,
+    slowcontrol_filename = slow_control_db_file_name
 ):
+    ### initializing
+    print("\n\n\n#########################################################")
+    print("### monmonxe_finish: retrieving, syncing and deleting slow control data")
+    print("#########################################################\n\n\n")
+
+    ### retrieving the slow control data .db file
+    
+    ### syncing the measurement data between the readout machine and the desktop pc
+    
+    ### end of program: clearing the slow control .db file from the slow control machine
+    if False:
+        subprocess.call("ssh {} rm {}{}".format(slow_control_machine_ip_address, slow_control_machine_monmonxe_folder, slowcontrol_filename), shell=True)
+    print("#############################################")
+    print("### monmonxe_finish: cleared {}".format(temp_filestring))
+    print("#############################################\n")
+    print("\n\n#########################################################")
+    print("### monmonxe_display: finished")
+    print("#########################################################\n\n\n")
     return
 
 
@@ -357,11 +438,11 @@ def monmonxe_main(
 
     ### initializing
     print("\n\n\n#########################################################")
-    print("### monmonxe: initializing")
+    print("### monmonxe_main: initializing")
     print("#########################################################\n")
     # generating the directories containing the sensor output (if not already existing)
     for i in range(len(sensor_list)):
-        subprocess.call("mkdir ./sensor_readings/" +sensor_list[i].name +"/", shell=True)
+        subprocess.call("mkdir /home/pi/monmonxe/sensor_readings/" +sensor_list[i].name +"/", shell=True)
 
     ### main program
     try:
@@ -404,14 +485,14 @@ def monmonxe_main(
         # turning off the control LED
         set_revpi_led(0)
         print("\n\n\n#########################################################")
-        print("### monmonxe: finished")
+        print("### monmonxe_main: finished")
         print("#########################################################\n")
     # catching any other exception
     except:
         # turning off the control LED
         set_revpi_led(0)
         print("\n\n\n#########################################################")
-        print("### monmonxe: AN EXCEPTION OCCURED !")
+        print("### monmonxe_main: AN EXCEPTION OCCURED !")
         print("#########################################################\n")
 
 
