@@ -3,20 +3,18 @@
 ### README
 #####################################################
 
-'''
 
-How to Use:
-    - Implement sensors by adding an entry to the 'sensor_list' defined within 'Definitions: Sensor Initialization'.
-    - Run by executing this file ($ python3 monmonxe.py)
-    - Stop by XXX.
+# How to Use:
+#     - Implement sensors by adding an entry to the 'sensor_list' defined within 'Definitions: Sensor Initialization'.
+#     - Run by executing this file ($ python3 monmonxe.py)
+#     - Stop by x.
+# 
+# Helpful Stuff:
+#     - RevPi tutorial by Kunbus:
+#         - analog inputs: https://revolution.kunbus.de/tutorials/revpi-aio/analoge-eingaenge-konfigurieren/
+#         - piTest: https://revolution.kunbus.de/tutorials/software-2/pitest/
+#         - RevPi Forum: https://revolution.kunbus.de/forum/
 
-Helpful Stuff:
-    - RevPi tutorial by Kunbus:
-        - analog inputs: https://revolution.kunbus.de/tutorials/revpi-aio/analoge-eingaenge-konfigurieren/
-        - piTest: https://revolution.kunbus.de/tutorials/software-2/pitest/
-        - RevPi Forum: https://revolution.kunbus.de/forum/
-
-'''
 
 
 
@@ -46,13 +44,26 @@ import os
 sleeptime = 1
 
 
-# relevant paths
+# ip addresses
+ip_revpi_c3 = "pi@10.42.0.187"
+ip_lptp = "monxe@"
+
+
+# paths within the readout laptop (lptp)
+path_measurement_data = "/home/monxe/Desktop/measurement_data/" # folder within the measurement data is stored (each measurement corresponds to one subfolder)
+
+
+# paths within the slow control machine (revpi_c3)
+path_monmonxe_folder = "/home/pi/monmonxe/" # folder within which the slow control files are stored
 path_prozessabbild_binary = "/dev/piControl0" # 'Prozessabbild' binary file within the RevPi root file system
 path_sensor_outputs = "/home/pi/monmonxe/sensor_readings/" # folder within which the sensor output files are stored
 
 
 # led addresses
 led_offset = 6
+
+
+
 
 
 #####################################################
@@ -297,6 +308,42 @@ def control_sleep_and_led(input_sleeptime=sleeptime, prozessabbild_binary_string
 
 
 #####################################################
+### Main: init, display, finish
+#####################################################
+
+
+# This is the main function used to initialize a measurement with the MonXe detector.
+# The corresponding folders are created and the monmonxe_main() function is executed on 'revpi_c3' within a detached screen.
+def monmonxe_init(
+    measurement_data = path_measurement_data,
+    slow_control_machine_address = ip_revpi_c3
+):
+    return
+
+
+# This is the main function used to display the sensor readings from the currently running slow control session.
+def monmonxe_display(
+    measurement_data = path_measurement_data,
+    slow_control_machine_ip_address = ip_revpi_c3,
+    slow_control_machine_monmonxe_folder = path_monmonxe_folder
+):
+    return
+
+
+# This is the main function used to finish both the running slow control session and also the current measurement
+# by copying the slow control data from the slow control machine into the measurement data folder, syncing the measurement data folders and deleting the slow control data from the sc machine.
+def monmonxe_finish(
+    measurement_data = path_measurement_data,
+    slow_control_machine_ip_address = ip_revpi_c3,
+    slow_control_machine_monmonxe_folder = path_monmonxe_folder
+):
+    return
+
+
+
+
+
+#####################################################
 ### Main: Sensor Readout
 #####################################################
 
@@ -370,6 +417,7 @@ def monmonxe_main(
 
 
 
+
 #####################################################
 ### Executing Main
 #####################################################
@@ -383,23 +431,29 @@ if __name__=="__main__":
     parser.add_argument('-r', '--runmode', dest='runmode', type=str, required=False, default="slow_control")
     runmode = parser.parse_args().runmode
 
-    # case 1: running the slow control (default)
-    if runmode in ["slow_control", "run_slow_control", "sc"]:
+    # case 1: initializing a new measurement
+    if runmode in ["i", "in", "init", "initialize", "initialise"]:
+        monmonxe_init()
+
+    # case 2: running the slow control (default)
+    elif runmode in ["slow_control", "run_slow_control", "sc", "main"]:
         monmonxe_main()
 
-    # case 2: initializing a new measurement
-    elif runmode in ["i", "in", "init", "initialize", "initialise"]:
-        
+    # case 3: display the current sensor readings
+    elif runmode in ["display", "read", "d", "sensor_readings"]:
+        monmonxe_display()
 
-    # case 3: finishing the current measurement
+    # case 4: finishing the current measurement
     elif runmode in ["f", "finish", "finished", "final", "fin"]:
-        
+        monmonxe_finish()
 
-    # case 4: invalid input
+    # case 5: invalid input
     else:
         print("That's falsch!")
         print("It's not working.")
-        print("It should...")
+        print("But it should.")
+        print("It isn't.")
+        print("But it should...")
 
 
 
