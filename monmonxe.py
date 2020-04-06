@@ -30,6 +30,8 @@ import subprocess
 import argparse
 import numpy as np
 import os
+import sqlite3
+
 
 
 
@@ -49,6 +51,7 @@ ip_readout_machine = "monxe@"
 path_measurement_data = "/home/monxe/Desktop/measurement_data/" # folder within the measurement data is stored (each measurement corresponds to one subfolder)
 path_temp_folder = path_measurement_data +"temp/"
 
+
 # paths within the slow control machine (revpi_c3)
 ip_slow_control_machine = "pi@10.42.0.187"
 path_monmonxe_folder = "/home/pi/monmonxe/" # folder within which the slow control files are stored
@@ -58,33 +61,55 @@ path_sensor_outputs = "/home/pi/monmonxe/sensor_readings/" # folder within which
 
 # miscellaneous definitions
 slow_control_db_file_name = "monmonxe_slow_control_data.db"
+slow_control_db_table_name = "slow_control_data"
 led_offset = 6
+sqlite_db_format = "(datetime, sensorname, reading_raw, reading, reading_error)" # this is the format (i.e. the names of the columns) of the database table
 
 
 
 
 
 #####################################################
-### Definitions: Sensor Initializsation
+### Definitions: Sensor Initialization
 #####################################################
 
 
 # This function is used to generate a conversion function that will be used to compute physical quantities derived from the raw sensor readings.
 # pressure sensor output --->  absolute pressure in bar.
-def ret_func_to_convert_pressure_sensor_current_reading_into_absolute_pressure_in_bar():
-    return lambda sensor : (((sensor.raw_reading/1000 -sensor.sensor_output[1])/(sensor.sensor_output[2]-sensor.sensor_output[1]))*(sensor.measured_quantity[2]-sensor.measured_quantity[1]))+sensor.measured_quantity[1]
+def sensorfunction__linear_conversion_from_sensor_current_or_voltage_into_physical_reading(conversion_factor):
+    return lambda sensor : (((sensor.reading_raw*conversion_factor -sensor.sensor_output[2])/(sensor.sensor_output[3]-sensor.sensor_output[2]))*(sensor.measured_quantity[3]-sensor.measured_quantity[2]))+sensor.measured_quantity[2]
+
+
+# This function is used to generate a function that is calculating the error on the pressure reading of the OMEGA pressure sensors.
+# This error is comprised of the accurracy of the pressure sensors themselves (0.05% FS) and the readout of the sensor current (72muA, see RevPi AIO data sheet).
+# The total error is calculated as the squared sum of those: s = sqrt(s_aio^2 +s_ps^2).
+def sensorfunction__error_for_omega_pressure_sensors():
+    s_aio = (20/(20000-4000)) *2 # accurracy of the current measurement is 20muA, sensor output is 4m to 20ma, pressure range is 2bar
+    s_ps = 0.05 *0.01 *2 # accurracy of the sensor is 0.05% FS (i.e. 0.05% of the full pressure range)
+    s_total = np.sqrt(s_ps**2 +s_aio**2)
+    return lambda sensor : s_total
 
 
 # This function is used to generate a conversion function that will be used to compute physical quantities derived from the raw sensor readings.
 # PT100 reading ---> temperature in Kelvin
-def ret_func_to_convert_pt100_reading_into_temperature_in_kelvin():
-    return lambda sensor : (sensor.raw_reading/10) +273.15
+def sensorfunction__rtd_pt100_reading_to_temperature_in_kelvin():
+    return lambda sensor : (sensor.reading_raw/10) +273.15
 
 
-# This function is used to generate a conversion function that will be used to compute physical quantities derived from the raw sensor readings.
-# PT100 reading ---> temperature in degrees Celsius
-def ret_func_to_convert_pt100_reading_into_temperature_in_celsius():
-    return lambda sensor : sensor.raw_reading/10
+# This function is used to generate a function that is calculating the error of the temperature reading of PT100.
+# This error is comprised of the accurracy of the PT100 thermistors themselves () and the readout of the sensor resistance ().
+# The total error is calculated as the squared sum of those: s = sqrt(s_aio^2 +s_pt100^2).
+def sensorfunction__error_for_rtd_pt100_reading(rtd_class):
+    s_aio = 0.5 # accurracy of the PT100 measurement is 0.5K at 20°C and 1.5K from -30°C to +55°C
+    rtd_class_dict = {
+        "AA" : [0.1, 0.17],
+        "A" : [0.15, 0.2], # accurracy of the sensor is +-(classb[0] +0.01*classb[1]*temperature_reading); https://blog.beamex.com/pt100-temperature-sensor; assuming class B
+        "B" : [0.3, 0.5],
+        "C" : [0.6, 1.0],
+        "1/3DIN" : [0.1, 0.5],
+        "1/10DIN" : [0.03, 0.5]
+    }
+    return lambda sensor : np.sqrt(s_aio**2 +(rtd_class_dict[rtd_class][0] +(0.01 *rtd_class_dict[rtd_class][1] *((sensor.reading_raw/10) -273.15)))**2)
 
 
 # This is the sensor class.
@@ -101,8 +126,9 @@ class sensor:
             sensor_output,
             measured_quantity,
             datetimestamp=None,
-            raw_reading=None,
-            derived_readings={}
+            reading_raw =None,
+            reading=None,
+            reading_error=None
         ):
         self.name = name # name of the sensor (e.g. as it is used in the documentation)
         self.address = address # the 'address' is specified within 'Pictory'
@@ -111,21 +137,22 @@ class sensor:
         self.sensor_output = sensor_output # syntax: [<min_output_range>, <max_output_range>, <output_unit>, <readout_unit_conversion_(1000*muA=mA)>]
         self.measured_quantity = measured_quantity # syntax: [<lower_bound_of_the_measured_range>, <upper_bound_of_the_measured_range>, <unit_of_the_measured_quantity>]
         self.datetimestamp = datetimestamp # the current datetimestamp will be stored here
-        self.raw_reading = raw_reading # the raw reading of the sensor (the value displayed within the 'Prozessabbild') will be stored here
-        self.derived_readings = derived_readings # empty dict that is supposed to hold the reading values that are forwarded to .csv files
+        self.reading_raw = reading_raw # the raw reading of the sensor (the value displayed within the 'Prozessabbild') will be stored here
+        self.reading = [None, reading]
+        self.reading_error = [None, reading_error]
         return
 
     # retrieving the current raw sensor reading
     def get_raw_sensor_reading(self):
         with open(self.prozessabbild_binary, "wb+", 0) as f: # opening the 'Prozessabbild' binary file
             f.seek(self.offset) # offsetting the coursor within the 'Prozessabbild'
-            self.raw_reading = int.from_bytes(f.read(2), 'little') # generating an integer object from the two bytes retrieved from the offset position
+            self.reading_raw = int.from_bytes(f.read(2), 'little') # generating an integer object from the two bytes retrieved from the offset position
         return
 
     # updating the derived readings
     def update_derived_readings(self):
-        for key in sorted(self.derived_readings):
-            self.derived_readings[key][0] = self.derived_readings[key][1](self)
+        self.reading[0] = self.reading[1](self)
+        self.reading_error[0] = self.reading_error[1](self)
         return
 
     # generating the header line for the .csv file for the current sensor configuration
@@ -153,11 +180,10 @@ sensor_list = [
         address="InputValue_2",
         prozessabbild_binary_string=path_prozessabbild_binary,
         offset=13,
-        sensor_output=["mA", 4, 20],
-        measured_quantity=["pressure", 0, 2, "bar"],
-        derived_readings={
-            "pressure_in_bar" : [None, ret_func_to_convert_pressure_sensor_current_reading_into_absolute_pressure_in_bar()]
-        }
+        sensor_output=["current", "mA", 4, 20],
+        measured_quantity=["pressure", "bara", 0, 2],
+        reading = sensorfunction__linear_conversion_from_sensor_current_or_voltage_into_physical_reading(conversion_factor=0.001),
+        reading_error = sensorfunction__error_for_omega_pressure_sensors()
     ),
 
     sensor(
@@ -165,11 +191,10 @@ sensor_list = [
         address="InputValue_3",
         prozessabbild_binary_string=path_prozessabbild_binary,
         offset=15,
-        sensor_output=["mA", 4, 20],
-        measured_quantity=["pressure", 0, 2, "bar"],
-        derived_readings={
-            "pressure_in_bar" : [None, ret_func_to_convert_pressure_sensor_current_reading_into_absolute_pressure_in_bar()]
-        }
+        sensor_output=["current", "mA", 4, 20],
+        measured_quantity=["pressure", "bara",0, 2],
+        reading = sensorfunction__linear_conversion_from_sensor_current_or_voltage_into_physical_reading(conversion_factor=0.001),
+        reading_error = sensorfunction__error_for_omega_pressure_sensors()
     ),
 
     sensor(
@@ -177,11 +202,10 @@ sensor_list = [
         address="InputValue_4",
         prozessabbild_binary_string=path_prozessabbild_binary,
         offset=17,
-        sensor_output=["mA", 4, 20],
-        measured_quantity=["pressure", 0, 2, "bar"],
-        derived_readings={
-            "pressure_in_bar" : [None, ret_func_to_convert_pressure_sensor_current_reading_into_absolute_pressure_in_bar()]
-        }
+        sensor_output=["current", "mA", 4, 20],
+        measured_quantity=["pressure", "bara", 0, 2],
+        reading = sensorfunction__linear_conversion_from_sensor_current_or_voltage_into_physical_reading(conversion_factor=0.001),
+        reading_error = sensorfunction__error_for_omega_pressure_sensors()
     ),
 
     sensor(
@@ -189,12 +213,10 @@ sensor_list = [
         address="RTDValue_1",
         prozessabbild_binary_string=path_prozessabbild_binary,
         offset=23,
-        sensor_output=["PT100"],
-        measured_quantity=["temperature"],
-        derived_readings={
-            "temperature_in_celsius" : [None, ret_func_to_convert_pt100_reading_into_temperature_in_celsius()],
-            "temperature_in_kelvin" : [None, ret_func_to_convert_pt100_reading_into_temperature_in_kelvin()]
-        }
+        sensor_output=["rtd", "pt100"],
+        measured_quantity=["temperature", "kelvin"],
+        reading = sensorfunction__rtd_pt100_reading_to_temperature_in_kelvin(),
+        reading_error = sensorfunction__error_for_rtd_pt100_reading(rtd_class="B")
     )
 
 ]
@@ -204,7 +226,7 @@ sensor_list = [
 
 
 #####################################################
-### Definitions: Helper Functions
+### Helper Functions: General
 #####################################################
 
 
@@ -214,17 +236,54 @@ def datestring():
 
 
 # This function is used to generate a timestring (e.g. timestring() ---> "172043_123" for 17h 20min 43sec 123msec)
-def timestring(flag_showmilliseconds=True):
+def timestring(flag_showmilliseconds=True, flag_separate_milliseconds=True):
     hours = str(datetime.datetime.today().hour).zfill(2)
     minutes = str(datetime.datetime.today().minute).zfill(2)
     seconds = str(datetime.datetime.today().second).zfill(2)
     milliseconds = str(datetime.datetime.today().microsecond).zfill(6)[:-3]
-    if flag_showmilliseconds == True:
+    if flag_showmilliseconds == True and flag_separate_milliseconds == True:
         return hours +minutes +seconds +"_" +milliseconds
+    elif flag_showmilliseconds == True and flag_separate_milliseconds == False:
+        return hours +minutes +seconds +milliseconds
     elif flag_showmilliseconds == False:
         return hours +minutes +seconds
     else:
         raise Exception
+
+
+# This function is used to control the A1 LED of the RevPi.
+# 1: green
+# 2: red
+# 0: off
+def set_revpi_led(value, offset=led_offset, prozessabbild_binary_string=path_prozessabbild_binary):
+    with open(prozessabbild_binary_string, "wb+", 0) as f: # opening the 'Prozessabbild' binary file
+        f.seek(offset) # offsetting the coursor within the 'Prozessabbild'
+        f.write(value.to_bytes(1, byteorder='big')) # writing one byte to the 'Prozessabbild' binary file
+    return
+
+
+# This function is used for the sleep led control.
+def control_sleep_and_led(input_sleeptime=sleeptime, prozessabbild_binary_string=path_prozessabbild_binary, offset=led_offset):
+    time.sleep(sleeptime)
+    blinkylist = [
+        [1, 0.3],
+        [0, 0.1],
+        [1, 0.5],
+        [0, 0.1]
+    ]
+    with open(prozessabbild_binary_string, "wb+", 0) as f:
+        for i in range(len(blinkylist)):
+            set_revpi_led(offset=offset, value=blinkylist[i][0], prozessabbild_binary_string=prozessabbild_binary_string)
+            time.sleep(blinkylist[i][1]*input_sleeptime)
+    return
+
+
+
+
+
+#####################################################
+### Helper Functions: Writing Data to .csv
+#####################################################
 
 
 # This function is used to write the sensor readints into a .txt. file.
@@ -275,30 +334,30 @@ def get_sensor_csv_file(sensor, savefolderstring=path_sensor_outputs):
         return savefolderstring +appendstring
 
 
-# This function is used to control the A1 LED of the RevPi.
-# 1: green
-# 2: red
-# 0: off
-def set_revpi_led(value, offset=led_offset, prozessabbild_binary_string=path_prozessabbild_binary):
-    with open(prozessabbild_binary_string, "wb+", 0) as f: # opening the 'Prozessabbild' binary file
-        f.seek(offset) # offsetting the coursor within the 'Prozessabbild'
-        f.write(value.to_bytes(1, byteorder='big')) # writing one byte to the 'Prozessabbild' binary file
-    return
 
 
-# This function is used for the sleep led control.
-def control_sleep_and_led(input_sleeptime=sleeptime, prozessabbild_binary_string=path_prozessabbild_binary, offset=led_offset):
-    time.sleep(sleeptime)
-    blinkylist = [
-        [1, 0.3],
-        [0, 0.1],
-        [1, 0.5],
-        [0, 0.1]
-    ]
-    with open(prozessabbild_binary_string, "wb+", 0) as f:
-        for i in range(len(blinkylist)):
-            set_revpi_led(offset=offset, value=blinkylist[i][0], prozessabbild_binary_string=prozessabbild_binary_string)
-            time.sleep(blinkylist[i][1]*input_sleeptime)
+
+#####################################################
+### Helper Functions: Writing Data to .db
+#####################################################
+
+
+
+
+# This function is used to add an entry to a SQLite database file.
+def add_entry_to_sqlite_database(
+        dbconn,
+        values,
+        tablename=slow_control_db_table_name,
+        databaseformat=sqlite_db_format
+    ):
+    # writing the command to add data to the database into a multiple line string
+    qmstring = str(("?",)*len(values))
+    print(qmstring)
+    sqlstring = "INSERT INTO {}{} VALUES(?, ?, ?, ?, ?)".format(tablename, databaseformat)
+    print(sqlstring)
+    cur = dbconn.cursor()
+    cur.execute(sqlstring, values)
     return
 
 
@@ -379,7 +438,7 @@ def monmonxe_display(
     except:
         # turning off the control LED
         print("#############################################")
-        print("### monmonxe_display: AN ERROR OCCURRED)
+        print("### monmonxe_display: AN ERROR OCCURRED")
         print("#############################################\n")
     finally:
         subprocess.call("rm -r {}*".format(temp_filestring), shell=True)
@@ -433,7 +492,11 @@ def monmonxe_finish(
 def monmonxe_main(
     input_sensor_list = sensor_list,
     input_path_sensor_outputs = path_sensor_outputs,
-    input_sleeptime = sleeptime
+    input_sleeptime = sleeptime,
+    mode = ".db",
+    databasestring = path_monmonxe_folder +slow_control_db_file_name,
+    databasetablename = slow_control_db_table_name,
+    databaseformat = sqlite_db_format
 ):
 
     ### initializing
@@ -441,39 +504,63 @@ def monmonxe_main(
     print("### monmonxe_main: initializing")
     print("#########################################################\n")
     # generating the directories containing the sensor output (if not already existing)
-    for i in range(len(sensor_list)):
-        subprocess.call("mkdir /home/pi/monmonxe/sensor_readings/" +sensor_list[i].name +"/", shell=True)
-
+    if mode == ".csv":
+        for i in range(len(sensor_list)):
+            subprocess.call("mkdir /home/pi/monmonxe/sensor_readings/" +sensor_list[i].name +"/", shell=True)
+    elif mode == ".db":
+        if not os.path.isfile(databasestring):
+            conn = sqlite3.connect(databasestring)
+            sql_monxe_table_string = """ CREATE TABLE IF NOT EXISTS {} (
+                                        datetime integer NOT NULL,
+                                        sensorname text NOT NULL,
+                                        reading_raw integer NOT NULL,
+                                        reading real NOT NULL,
+                                        reading_error real NOT NULL
+                                     ); """.format(databasetablename)
+            conn.execute(sql_monxe_table_string)
+        else:
+            print("\n\n#############################################")
+            print("### monmonxe_main: There was already an existing database file. Delete it first - and don't forget to sync.")
+            print("#############################################")
+            raise Exception
+    else:
+        raise Exception
     ### main program
     try:
     #if True:
         while True:
-
             # generating datetime- date- and timestamps valid for all sensor readings for this specific iteration of the while loop
-            datetimestamp = datestring() +"_" +timestring()
+            datetimestamp = datestring() +"_" +timestring(flag_separate_milliseconds=True)
             datestamp = list(datetimestamp.split("_"))[0]
             timestamp = list(datetimestamp.split("_"))[1] +list(datetimestamp.split("_"))[2]
-
             print("\n\n#############################################")
             print("datetime: {}\n".format(datetimestamp))
-
+            datetimestamp = int(datestring() +timestring(flag_separate_milliseconds=False))
             # looping over all sensors and processing their current readings
             for i in range(len(sensor_list)):
                 # storing the current readings within the dictionary
                 sensor_list[i].datetimestamp = datetimestamp
                 sensor_list[i].get_raw_sensor_reading()
                 sensor_list[i].update_derived_readings()
-                # saving the current readings to the .csv output file
-                appendstring = get_sensor_csv_file(sensor_list[i])
-                with open(appendstring, "a+") as f:
-                    f.write(sensor_list[i].gen_sensor_readings_line())
+                # mode: saving the current readings to the .csv output file
+                if mode == ".csv":
+                    appendstring = get_sensor_csv_file(sensor_list[i])
+                    with open(appendstring, "a+") as f:
+                        f.write(sensor_list[i].gen_sensor_readings_line())
+                # mode: saving the current readings to the SQLite database
+                elif mode == ".db":
+                    values = (datetimestamp, sensor_list[i].name, sensor_list[i].reading_raw, sensor_list[i].reading[0], sensor_list[i].reading_error[0])
+                    print(values)
+                    add_entry_to_sqlite_database(dbconn=conn, values=values, tablename=databasetablename, databaseformat=databaseformat)
+                # mode: no valid mode given
+                else:
+                    raise Exception
                 # printing the current readings to the screen
                 print("{}".format(sensor_list[i].name))
-                print("raw_reading: {:.2f}".format(sensor_list[i].raw_reading))
-                for key in sorted(sensor_list[i].derived_readings):
-                    print("{}: {:.2f}".format(key, sensor_list[i].derived_readings[key][0]))
+                print("reading_raw: {:.2f}".format(sensor_list[i].reading_raw))
+                print("reading: {:.2f}".format(sensor_list[i].reading[0]))
+                print("reading_error: {:.2f}".format(sensor_list[i].reading_error[0]))
                 print("")
-
             print("#############################################")
 
             # controling sleeping and the LED
@@ -483,6 +570,8 @@ def monmonxe_main(
     # exiting gracefully
     except (KeyboardInterrupt, SystemExit):
         # turning off the control LED
+        conn.commit()
+        conn.close()
         set_revpi_led(0)
         print("\n\n\n#########################################################")
         print("### monmonxe_main: finished")
@@ -490,6 +579,8 @@ def monmonxe_main(
     # catching any other exception
     except:
         # turning off the control LED
+        conn.commit()
+        conn.close()
         set_revpi_led(0)
         print("\n\n\n#########################################################")
         print("### monmonxe_main: AN EXCEPTION OCCURED !")
