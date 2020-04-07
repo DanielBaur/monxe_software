@@ -48,8 +48,10 @@ sleeptime = 1
 
 # configuring the readout machine (currently 'lptp')
 ip_readout_machine = "monxe@"
+path_software = "/home/monxe/Desktop/monxe_software/"
 path_measurement_data = "/home/monxe/Desktop/measurement_data/" # folder within the measurement data is stored (each measurement corresponds to one subfolder)
-path_temp_folder = path_measurement_data +"temp/"
+path_temp_folder = path_measurement_data +"00000000__temp/"
+thisfilename = "monmonxe.py"
 
 
 # paths within the slow control machine (revpi_c3)
@@ -264,7 +266,7 @@ def set_revpi_led(value, offset=led_offset, prozessabbild_binary_string=path_pro
 
 # This function is used for the sleep led control.
 def control_sleep_and_led(input_sleeptime=sleeptime, prozessabbild_binary_string=path_prozessabbild_binary, offset=led_offset):
-    time.sleep(sleeptime)
+    #time.sleep(sleeptime)
     blinkylist = [
         [1, 0.3],
         [0, 0.1],
@@ -365,7 +367,7 @@ def add_entry_to_sqlite_database(
 
 
 #####################################################
-### Main: init, display, finish
+### Main: init, display, finish, update
 #####################################################
 
 
@@ -413,7 +415,9 @@ def monmonxe_display(
     temp_filestring = path_temp_folder,
     slow_control_machine_ip_address = ip_slow_control_machine,
     slow_control_machine_monmonxe_folder = path_monmonxe_folder,
-    slow_control_data_filename = slow_control_db_file_name
+    slow_control_data_filename = slow_control_db_file_name,
+    slow_control_data_tablename = slow_control_db_table_name,
+    time_sleep = sleeptime
 ):
     ### initializing
     print("\n\n\n#########################################################")
@@ -423,16 +427,28 @@ def monmonxe_display(
     ### repetedly get the current slow control data and print the latest values
     try:
         while True:
-            subprocess.call("scp {}:{}{} {}{}".format(slow_control_machine_ip_address, slow_control_machine_monmonxe_folder, slow_control_data_filename, temp_filestring, slow_control_data_filename), shell=True)
             print("#############################################")
-            print("### monmonxe_display: retrieved current slow control data:")
-            print("#############################################\n")
+            subprocess.call("scp {}:{}{} {}{}".format(slow_control_machine_ip_address, slow_control_machine_monmonxe_folder, slow_control_data_filename, temp_filestring, slow_control_data_filename), shell=True)
+            print("### monmonxe_display: retrieved current slow control data")
+            print("#############################################")
+            conn = sqlite3.connect(temp_filestring +slow_control_data_filename)
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM {} ORDER BY {} DESC LIMIT 4".format(slow_control_data_tablename, "datetime"))
+            rows = cursor.fetchall()
+            dt = str(rows[0][0])
+            print("datetime: {}_{}_{}".format(dt[0:8], dt[8:12], dt[12:15]))
+            print("sensor\t\treading_raw\treading\t\treading_error")
+            for row in rows:
+                print("{}\t\t{}\t\t{:.2f}\t\t{:.2f}".format(row[1], row[2], row[3], row[4]))
+            conn.close()
+            print("#############################################\n\n")
+            time.sleep(2*time_sleep)
 
     ### end of program: clearing the temp folder
     # keyboard interrupt
     except (KeyboardInterrupt, SystemExit):
         print("###########################################")
-        print("### monmonxe_display: stopped vie keyboard interrupt")
+        print("### monmonxe_display: stopped via keyboard interrupt")
         print("#############################################\n")
     # catching any other exceptions
     except:
@@ -440,8 +456,9 @@ def monmonxe_display(
         print("#############################################")
         print("### monmonxe_display: AN ERROR OCCURRED")
         print("#############################################\n")
+    # clearing the temp folder
     finally:
-        subprocess.call("rm -r {}*".format(temp_filestring), shell=True)
+        #subprocess.call("rm -r {}*".format(temp_filestring), shell=True)
         print("#############################################")
         print("### monmonxe_display: cleared {}".format(temp_filestring))
         print("#############################################\n")
@@ -464,18 +481,82 @@ def monmonxe_finish(
     print("### monmonxe_finish: retrieving, syncing and deleting slow control data")
     print("#########################################################\n\n\n")
 
+    ### retrieving the pathstring of the measurement folder
+    print("#############################################")
+    print("### monmonxe_finish: retrieving the current measurement folder")
+    print("#############################################")
+    # retrieving list of available directories
+    enumerate_measurement_directories = list(enumerate(os.walk(readout_machine_path_to_measurement_data))) # for each directory within 'deck_path' a tuple is returned: (<the_current_path>, <a_list_of_subdirectories_within>, <a_list_of_files_within>)
+    measurement_directories = []
+    for i in range(len(enumerate_measurement_directories)):
+        measurement_directories.append(list(enumerate_measurement_directories[i][1][0].split("/"))[len(list(enumerate_measurement_directories[i][1][0].split("/")))-1])
+    measurement_directories.pop(0)
+    # determining the most probable folder
+    measurement_directories_dates = []
+    for i in range(len(measurement_directories)):
+        measurement_directories_dates.append(int(list(measurement_directories[i].split("__"))[0]))
+    default_measurement_folder_number = measurement_directories_dates.index(max(measurement_directories_dates))
+    isdefault_list = list(("",)*len(measurement_directories))
+    isdefault_list[default_measurement_folder_number] = "<------------------------------------ default measurement folder"
+    # asking the user for definitive input
+    print("Here's a list of the available measurement directories:")
+    for i in range(len(measurement_directories)):
+        print("{} | {} {}".format(i, measurement_directories[i], isdefault_list[i]))
+    measurement_folder_number = input("In which one would you like to store the slow control data?\n")
+    try:
+        measurement_folder_number = int(measurement_folder_number)
+    except:
+        pass
+    while not (measurement_folder_number in range(0, len(measurement_directories)) or measurement_folder_number == ""):
+        print("Your input was invalid!")
+        measurement_folder_number = input("In which one would you like to store the slow control data?\n")
+        try:
+            measurement_folder_number = int(measurement_folder_number)
+        except:
+            pass
+    # determining the measurement folder
+    if measurement_folder_number == "":
+        slow_control_data_pathstring = readout_machine_path_to_measurement_data +measurement_directories[default_measurement_folder_number]
+    else:
+        slow_control_data_pathstring = readout_machine_path_to_measurement_data +measurement_directories[measurement_folder_number]
+    print("The slow control data will be stored in '{}'.".format(slow_control_data_pathstring))
+    print("#############################################\n")
+
+    ### killing the slow control process on the RevPi
+    subprocess.call("ssh -t {} screen -XS monmonxe quit".format(slow_control_machine_ip_address), shell=True)
+    #subprocess.call("ssh pi@10.42.0.187 screen -r monmonxe".format(slow_control_machine_ip_address), shell=True) 
+    print("#############################################")
+    print("### monmonxe_finish: killed slow control data acquisition")
+    print("#############################################\n")
+
     ### retrieving the slow control data .db file
+    subprocess.call("scp {}:{}{} {}{}".format(slow_control_machine_ip_address, slow_control_machine_monmonxe_folder, slowcontrol_filename, slow_control_data_pathstring+"/", slowcontrol_filename), shell=True)
+    print("#############################################")
+    print("### monmonxe_finish: copied slow control data into '{}'".format(slow_control_data_pathstring +"/" +slowcontrol_filename))
     
     ### syncing the measurement data between the readout machine and the desktop pc
     
     ### end of program: clearing the slow control .db file from the slow control machine
-    if False:
-        subprocess.call("ssh {} rm {}{}".format(slow_control_machine_ip_address, slow_control_machine_monmonxe_folder, slowcontrol_filename), shell=True)
-    print("#############################################")
-    print("### monmonxe_finish: cleared {}".format(temp_filestring))
+    #if False:
+    subprocess.call("ssh {} rm {}{}".format(slow_control_machine_ip_address, slow_control_machine_monmonxe_folder, slowcontrol_filename), shell=True)
+    print("### monmonxe_finish: cleared {}".format(slow_control_machine_ip_address +":" +slow_control_machine_monmonxe_folder +slowcontrol_filename))
     print("#############################################\n")
     print("\n\n#########################################################")
     print("### monmonxe_display: finished")
+    print("#########################################################\n\n\n")
+    return
+
+
+# This function is used to upload the current version of 'monmonxe.py' (this file) onto the slow control machine.
+def monmonxe_update(
+    slow_control_machine_ip_address=ip_slow_control_machine,
+    slow_control_machine_monmonxe_folder=path_monmonxe_folder,
+    path_to_file=path_software,
+    filename=thisfilename
+):
+    subprocess.call("scp {} {}".format(path_to_file +filename, slow_control_machine_ip_address +":" +slow_control_machine_monmonxe_folder +filename), shell=True)
+    print("\n\n\n#########################################################")
+    print("### monmonxe_update: copied 'monmonxe.py' to '{}'".format(slow_control_machine_ip_address +":" +slow_control_machine_monmonxe_folder +"monmonxe.py"))
     print("#########################################################\n\n\n")
     return
 
@@ -501,7 +582,7 @@ def monmonxe_main(
 
     ### initializing
     print("\n\n\n#########################################################")
-    print("### monmonxe_main: initializing")
+    print("### monmonxe_main: recording slow control data")
     print("#########################################################\n")
     # generating the directories containing the sensor output (if not already existing)
     if mode == ".csv":
@@ -518,6 +599,8 @@ def monmonxe_main(
                                         reading_error real NOT NULL
                                      ); """.format(databasetablename)
             conn.execute(sql_monxe_table_string)
+            conn.commit()
+            conn.close()
         else:
             print("\n\n#############################################")
             print("### monmonxe_main: There was already an existing database file. Delete it first - and don't forget to sync.")
@@ -551,7 +634,10 @@ def monmonxe_main(
                 elif mode == ".db":
                     values = (datetimestamp, sensor_list[i].name, sensor_list[i].reading_raw, sensor_list[i].reading[0], sensor_list[i].reading_error[0])
                     print(values)
+                    conn = sqlite3.connect(databasestring)
                     add_entry_to_sqlite_database(dbconn=conn, values=values, tablename=databasetablename, databaseformat=databaseformat)
+                    conn.commit()
+                    conn.close()
                 # mode: no valid mode given
                 else:
                     raise Exception
@@ -608,7 +694,7 @@ if __name__=="__main__":
         monmonxe_init()
 
     # case 2: running the slow control (default)
-    elif runmode in ["slow_control", "run_slow_control", "sc", "main"]:
+    elif runmode in ["s", "sc", "slow_control", "run_slow_control", "main"]:
         monmonxe_main()
 
     # case 3: display the current sensor readings
@@ -616,10 +702,14 @@ if __name__=="__main__":
         monmonxe_display()
 
     # case 4: finishing the current measurement
-    elif runmode in ["f", "finish", "finished", "final", "fin"]:
+    elif runmode in ["f", "finish", "finished", "final", "fin", "stop", "interrupt"]:
         monmonxe_finish()
 
-    # case 5: invalid input
+    # case 5: update the 
+    elif runmode in ["u", "update"]:
+        monmonxe_update()
+
+    # case 6: invalid input
     else:
         print("That's falsch!")
         print("It's not working.")
