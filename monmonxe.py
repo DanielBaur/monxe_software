@@ -436,13 +436,13 @@ def monmonxe_display(
             cursor.execute("SELECT * FROM {} ORDER BY {} DESC LIMIT 4".format(slow_control_data_tablename, "datetime"))
             rows = cursor.fetchall()
             dt = str(rows[0][0])
-            print("datetime: {}_{}_{}".format(dt[0:8], dt[8:12], dt[12:15]))
+            print("datetime: {}_{}_{}".format(dt[0:8], dt[8:12], dt[12:14]))
             print("sensor\t\treading_raw\treading\t\treading_error")
             for row in rows:
                 print("{}\t\t{}\t\t{:.2f}\t\t{:.2f}".format(row[1], row[2], row[3], row[4]))
             conn.close()
             print("#############################################\n\n")
-            time.sleep(2*time_sleep)
+            time.sleep(time_sleep)
 
     ### end of program: clearing the temp folder
     # keyboard interrupt
@@ -458,7 +458,7 @@ def monmonxe_display(
         print("#############################################\n")
     # clearing the temp folder
     finally:
-        #subprocess.call("rm -r {}*".format(temp_filestring), shell=True)
+        subprocess.call("rm -r {}*".format(temp_filestring), shell=True)
         print("#############################################")
         print("### monmonxe_display: cleared {}".format(temp_filestring))
         print("#############################################\n")
