@@ -388,7 +388,6 @@ def monmonxe_init(
     print("### monmonxe_init: creating new measurement folder")
     datestamp = datestring()
     print("Today's datestamp is {}.".format(datestamp))
-    print("Your hair looks especially astonishing today!")
     foldername = input("How would you like to name the new measurement?\n")
     print("#############################################\n")
     folderstring = measurement_data +datestamp +"__" +foldername
