@@ -49,7 +49,7 @@ sleeptime = 1
 # configuring the readout machine (currently 'lptp')
 ip_readout_machine = "monxe@"
 path_software = "/home/monxe/Desktop/monxe_software/"
-path_measurement_data = "/home/monxe/Desktop/measurement_data/" # folder within the measurement data is stored (each measurement corresponds to one subfolder)
+path_measurement_data = "/home/monxe/Desktop/monxe_measurements/" # folder within the measurement data is stored (each measurement corresponds to one subfolder)
 path_temp_folder = path_measurement_data +"00000000__temp/"
 thisfilename = "monmonxe.py"
 
@@ -485,11 +485,15 @@ def monmonxe_finish(
     print("### monmonxe_finish: retrieving the current measurement folder")
     print("#############################################")
     # retrieving list of available directories
-    enumerate_measurement_directories = list(enumerate(os.walk(readout_machine_path_to_measurement_data))) # for each directory within 'deck_path' a tuple is returned: (<the_current_path>, <a_list_of_subdirectories_within>, <a_list_of_files_within>)
-    measurement_directories = []
-    for i in range(len(enumerate_measurement_directories)):
-        measurement_directories.append(list(enumerate_measurement_directories[i][1][0].split("/"))[len(list(enumerate_measurement_directories[i][1][0].split("/")))-1])
-    measurement_directories.pop(0)
+    #enumerate_measurement_directories = list(enumerate(os.walk(readout_machine_path_to_measurement_data))) # for each directory within 'deck_path' a tuple is returned: (<the_current_path>, <a_list_of_subdirectories_within>, <a_list_of_files_within>)
+    #measurement_directories = []
+    #for i in range(len(enumerate_measurement_directories)):
+    #    measurement_directories.append(list(enumerate_measurement_directories[i][1][0].split("/"))[len(list(enumerate_measurement_directories[i][1][0].split("/")))-1])
+    #measurement_directories.pop(0)
+    # retrieving a list of available directories 
+    folder_list = list(os.listdir(path_measurement_data))
+    measurement_directories = [i for i in folder_list if os.path.isdir(pathstring_folder +i)]
+
     # determining the most probable folder
     measurement_directories_dates = []
     for i in range(len(measurement_directories)):
