@@ -492,7 +492,7 @@ def monmonxe_finish(
     #measurement_directories.pop(0)
     # retrieving a list of available directories 
     folder_list = list(os.listdir(path_measurement_data))
-    measurement_directories = [i for i in folder_list if os.path.isdir(pathstring_folder +i)]
+    measurement_directories = [i for i in folder_list if os.path.isdir(path_measurement_data +i)]
 
     # determining the most probable folder
     measurement_directories_dates = []
