@@ -48,7 +48,7 @@ sleeptime = 1
 
 # configuring the readout machine (currently 'lptp')
 ip_readout_machine = "monxe@"
-path_software = "/home/monxe/Desktop/monxe_software/"
+path_software = "/home/monxe/Desktop/monxe_software/monmonxe/"
 path_measurement_data = "/home/monxe/Desktop/monxe_measurements/" # folder within the measurement data is stored (each measurement corresponds to one subfolder)
 path_temp_folder = path_measurement_data +"00000000__temp/"
 thisfilename = "monmonxe.py"
@@ -438,7 +438,7 @@ def monmonxe_display(
             print("datetime: {}_{}_{}".format(dt[0:8], dt[8:12], dt[12:14]))
             print("sensor\t\treading_raw\treading\t\treading_error")
             for row in rows:
-                print("{}\t\t{}\t\t{:.2f}\t\t{:.2f}".format(row[1], row[2], row[3], row[4]))
+                print("{}\t\t{}\t\t{:.6f}\t\t{:.6f}".format(row[1], row[2], row[3], row[4]))
             conn.close()
             print("#############################################\n\n")
             time.sleep(time_sleep)
