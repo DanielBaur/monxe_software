@@ -30,8 +30,8 @@ from matplotlib.offsetbox import TextArea, DrawingArea, OffsetImage, AnnotationB
 #######################################
 
 
-input_pathstring = "./Input/"
-output_pathstring = "./Output/"
+input_pathstring = "./input/"
+output_pathstring = "./output/"
 
 
 # colors
