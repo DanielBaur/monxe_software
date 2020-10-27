@@ -32,6 +32,7 @@ from matplotlib.offsetbox import TextArea, DrawingArea, OffsetImage, AnnotationB
 
 input_pathstring = "./input/"
 output_pathstring = "./output/"
+pathstring_thesis_images = "/home/daniel/Desktop/arbeitsstuff/20200720__thesis/images/miscfigimages/"
 
 
 # colors
@@ -176,7 +177,7 @@ def plot_line(start_tuple, end_tuple, linewidth=2, linecolor='black', **kwargs):
 
 
 # This function is used to connect a list of points with each other utilizing the 'plot_line' function defined above.
-def plot_line_connect_points(points_list, linewidth=2, linecolor="black", flag_connect_last_with_first=True, flag_single_connections=False):
+def plot_line_connect_points(points_list, linewidth=2, linecolor="black", flag_connect_last_with_first=True, flag_single_connections=False, input_zorder=30):
     x_list = []
     y_list = []
     # generating the lists of x and y coordinates of the points within the passed list
@@ -190,14 +191,56 @@ def plot_line_connect_points(points_list, linewidth=2, linecolor="black", flag_c
     # plotting the line connecting the dots
     if flag_single_connections == True:
         for i in range(len(x_list)-1):
-            plt.plot( [x_list[i], x_list[i+1]], [y_list[i], y_list[i+1]], linewidth=linewidth, color=linecolor)
+            plt.plot( [x_list[i], x_list[i+1]], [y_list[i], y_list[i+1]], linewidth=linewidth, color=linecolor, zorder=input_zorder)
     else:
-        plt.plot( x_list, y_list, linewidth=linewidth, color=linecolor)
+        plt.plot( x_list, y_list, linewidth=linewidth, color=linecolor, zorder=input_zorder)
+    return
+
+
+# This function is used to annotate a feature within a plot with an arrow.
+def annotate_image_with_arrow(
+    input_ax,
+    input_annotatestring,
+    input_arrowvertices,
+    input_xdist,
+    # arrow properties
+    input_arrow_linewidth,
+    input_arrow_color,
+    input_arrow_tipwidth,
+    input_arrow_tiplength,
+    input_arrowzorder = 30,
+    # text properties
+    input_fontsize = 11,
+    input_rotation = 0,
+    input_verticalalignment = "center",
+    input_horizontalalignment = "center",
+    input_textcolor = "black"):
+
+    # printing the annotatestring
+    astring = plt.text(
+        x = input_arrowvertices[0][0],
+        y = input_arrowvertices[0][1],
+        s = input_annotatestring,
+        fontsize = input_fontsize,
+        rotation = input_rotation,
+        verticalalignment = input_verticalalignment,
+        horizontalalignment = input_horizontalalignment,
+        color = input_textcolor)
+    # plotting the arrow
+    plot_arrow_connect_points(
+        ax = input_ax,
+        points_list = input_arrowvertices,
+        linewidth = input_arrow_linewidth,
+        color = input_arrow_color,
+        tip_width = input_arrow_tipwidth,
+        tip_length = input_arrow_tiplength,
+        flag_single_connections = True,
+        input_zorder = input_arrowzorder)
     return
 
 
 # This function is used to draw an arrow from a list of points
-def plot_arrow_connect_points(ax, points_list, linewidth, color, tip_width, tip_length, flag_single_connections=True):
+def plot_arrow_connect_points(ax, points_list, linewidth, color, tip_width, tip_length, flag_single_connections=True, input_zorder=30):
     # modifying the last point in the list so the tip of the arrow tip ends at the last point in 'points_list'
     line_points = points_list[:-1]
     recessed_point = scale_vec(norm_vec(two_tuple_vector=vs(points_list[len(points_list)-1], (-points_list[len(points_list)-2][0], -points_list[len(points_list)-2][1]))), tip_length)
@@ -209,12 +252,9 @@ def plot_arrow_connect_points(ax, points_list, linewidth, color, tip_width, tip_
     tip_left_point = vs(tip_center, scale_vec(n, 0.5*tip_width))
     tip_right_point = vs(tip_center, scale_vec(n, -0.5*tip_width))
     tip_points = [tip_endpoint, tip_left_point, tip_right_point]
-    # checking
-    print(line_points)
-    print(tip_points)
     # plotting
-    plot_line_connect_points(points_list=line_points, linewidth=linewidth, linecolor=color, flag_connect_last_with_first=False, flag_single_connections=flag_single_connections)
-    p = patches.Polygon(tip_points, facecolor=color, closed=True)
+    plot_line_connect_points(points_list=line_points, linewidth=linewidth, linecolor=color, flag_connect_last_with_first=False, flag_single_connections=flag_single_connections, input_zorder = input_zorder)
+    p = patches.Polygon(tip_points, facecolor=color, closed=True, zorder = input_zorder)
     ax.add_patch(p)
     return
 
@@ -224,6 +264,53 @@ def draw_number(ax, r, num="42", radius=2.8, circlecolor='black', textcolor='whi
     circle = patches.Circle(xy=r, radius=radius, facecolor=circlecolor, zorder=izorder, edgecolor='black', linewidth=1.1)
     ax.add_patch(circle)
     plt.text(x=r[0]+num_offset[0], y=r[1]+num_offset[1], s=num, color=textcolor, fontsize=textsize, verticalalignment='center', horizontalalignment='center', zorder=izorder+1)
+    return
+
+
+# This function is used to plot a double-tipped arrow connecting two points.
+def two_tip_arrow(
+    input_ax,
+    input_points_list,
+    input_linewidth,
+    input_color,
+    input_tip_width,
+    input_tip_length,
+    zorder=30,
+    flag_text="",
+    text_offset=(0,0),
+    text_horizontalalignment = "center",
+    text_verticalalignment = "center",
+    
+):
+    center_point = vs(input_points_list[0], (0.5*(input_points_list[1][0]-input_points_list[0][0]),0.5*(input_points_list[1][1]-input_points_list[0][1])))
+    plot_arrow_connect_points(
+        ax=input_ax,
+        points_list=[center_point, input_points_list[1]],
+        linewidth=input_linewidth,
+        color=input_color,
+        tip_width=input_tip_width,
+        tip_length=input_tip_length,
+        flag_single_connections=True,
+        input_zorder=30)
+    plot_arrow_connect_points(
+        ax=input_ax,
+        points_list=[center_point, input_points_list[0]],
+        linewidth=input_linewidth,
+        color=input_color,
+        tip_width=input_tip_width,
+        tip_length=input_tip_length,
+        flag_single_connections=True,
+        input_zorder=30)
+    if flag_text != "":
+        plt.text(
+            x = center_point[0]+text_offset[0],
+            y = center_point[1]+text_offset[1],
+            s = flag_text,
+            horizontalalignment = text_horizontalalignment,
+            verticalalignment = text_verticalalignment,
+            #transform = ax1.transAxes,
+            #fontsize=11
+        )
     return
 
 
@@ -927,12 +1014,23 @@ isotopes_dict = {
 
 # This function is used to plot an isotope box onto a plt. figure.
 # USAGE: plot_decaybox()
-def plot_isotope_box(ax, n, z, namestring, halflifestring, namestring_offset=(0,0), halflifestringstring_offset=(0,0), boxcolor='cyan', fs=20):
+def plot_isotope_box(
+    ax,
+    n,
+    z,
+    namestring,
+    halflifestring,
+    namestring_offset=(0,0),
+    halflifestringstring_offset=(0,0),
+    boxcolor='cyan',
+    fs=20,
+    col = "black"):
+
     box = patches.Rectangle(xy=(n,z), width=1, height=1, angle=0.0, linewidth=1, edgecolor='black', facecolor=boxcolor, zorder=30)
     ax.add_patch(box)
     #plt.text(0.05, 0.27, text_string, fontsize=22, transform = axes.transAxes)
-    plt.text(x=n+0.13+namestring_offset[0], y=z+0.6-0.05+namestring_offset[1], s=namestring, fontsize=(21/20)*fs, zorder=31)
-    plt.text(x=n+0.15+halflifestringstring_offset[0], y=z+0.19+halflifestringstring_offset[1], s=halflifestring, fontsize=(16/20)*fs, zorder=31)
+    plt.text(x=n+0.13+namestring_offset[0], y=z+0.6-0.05+namestring_offset[1], s=namestring, fontsize=(21/20)*fs, zorder=31, color=col)
+    plt.text(x=n+0.15+halflifestringstring_offset[0], y=z+0.19+halflifestringstring_offset[1], s=halflifestring, fontsize=(16/20)*fs, zorder=31, color=col)
 
 
 # This function is used to plot an arrow representing an alpha decay onto a plt.figure.
@@ -974,7 +1072,17 @@ def sd(d, sn, sz):
 
 
 # This is the main function used within 'Miscellaneous_Figures.ipynb' to plot a box representing a nucleide onto a plt.figure.
-def plot_decaybox(dictionary, dbax, dbnamestring_offset=(0,0), dbhalflifestringstring_offset=(0,0), dbboxcolor='cyan', dbfs=11, arrowcolor='black', labelcolor='black'):
+def plot_decaybox(
+    dictionary,
+    dbax,
+    dbnamestring_offset=(0,0),
+    dbhalflifestringstring_offset=(0,0),
+    dbboxcolor='cyan',
+    dbfs=11,
+    textcolor="black",
+    arrowcolor='black',
+    labelcolor='black'):
+
     # modifying the 'n' and 'z' value via sd() in order to match the definition of 'plot_alphaarrow', 'plot_betaarrow' and 'plot_decaybox'
     dictionary = sd(d=dictionary.copy(), sn=-0.5, sz=-0.5)
     # drawing the arrows
@@ -988,7 +1096,7 @@ def plot_decaybox(dictionary, dbax, dbnamestring_offset=(0,0), dbhalflifestrings
     if dictionary["decay"]=="beta+":
         plot_betaplusarrow(ax=dbax, n=dictionary["n"], z=dictionary["z"], fs=dbfs, arrowcolor=arrowcolor, stringcolor=labelcolor)
     # drawing the isotope box
-    plot_isotope_box(ax=dbax, n=dictionary["n"], z=dictionary["z"], namestring=dictionary["namestring"], halflifestring=dictionary["t_h"], namestring_offset=dbnamestring_offset, halflifestringstring_offset=dbhalflifestringstring_offset, boxcolor=dbboxcolor, fs=dbfs)
+    plot_isotope_box(ax=dbax, n=dictionary["n"], z=dictionary["z"], namestring=dictionary["namestring"], halflifestring=dictionary["t_h"], namestring_offset=dbnamestring_offset, halflifestringstring_offset=dbhalflifestringstring_offset, boxcolor=dbboxcolor, fs=dbfs, col=textcolor)
 
 
 
