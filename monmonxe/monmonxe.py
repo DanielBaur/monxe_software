@@ -178,7 +178,7 @@ class sensor:
 sensor_list = [
     
     sensor(
-        name="ps_1",
+        name="p_ev",
         address="InputValue_2",
         prozessabbild_binary_string=path_prozessabbild_binary,
         offset=13,
@@ -189,7 +189,7 @@ sensor_list = [
     ),
 
     sensor(
-        name="ps_2",
+        name="m_ml",
         address="InputValue_3",
         prozessabbild_binary_string=path_prozessabbild_binary,
         offset=15,
@@ -200,7 +200,7 @@ sensor_list = [
     ),
 
     sensor(
-        name="ps_3",
+        name="p_dv",
         address="InputValue_4",
         prozessabbild_binary_string=path_prozessabbild_binary,
         offset=17,
@@ -219,7 +219,29 @@ sensor_list = [
         measured_quantity=["temperature", "kelvin"],
         reading = sensorfunction__rtd_pt100_reading_to_temperature_in_kelvin(),
         reading_error = sensorfunction__error_for_rtd_pt100_reading(rtd_class="B")
-    )
+    ),
+
+    sensor(
+        name="p_ct1",
+        address="InputValue_2_i03", # at 'revpi_aio_2'
+        prozessabbild_binary_string=path_prozessabbild_binary,
+        offset=102,
+        sensor_output=["current", "mA", 4, 20],
+        measured_quantity=["pressure", "bara", 0, 15],
+        reading = sensorfunction__linear_conversion_from_sensor_current_or_voltage_into_physical_reading(conversion_factor=0.001),
+        reading_error = sensorfunction__error_for_omega_pressure_sensors()
+    ),
+
+    sensor(
+        name="p_ct2",
+        address="InputValue_3_i03", # at 'revpi_aio_2'
+        prozessabbild_binary_string=path_prozessabbild_binary,
+        offset=104,
+        sensor_output=["current", "mA", 4, 20],
+        measured_quantity=["pressure", "bara", 0, 15],
+        reading = sensorfunction__linear_conversion_from_sensor_current_or_voltage_into_physical_reading(conversion_factor=0.001),
+        reading_error = sensorfunction__error_for_omega_pressure_sensors()
+    ),
 
 ]
 
@@ -410,6 +432,7 @@ def monmonxe_init(
 
 
 # This is the main function used to display the sensor readings from the currently running slow control session.
+# 20210302: This function is deprecated as we are now using in-line process monitor displays to display each sensor reading.
 def monmonxe_display(
     temp_filestring = path_temp_folder,
     slow_control_machine_ip_address = ip_slow_control_machine,

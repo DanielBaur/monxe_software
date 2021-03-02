@@ -259,6 +259,57 @@ def plot_arrow_connect_points(ax, points_list, linewidth, color, tip_width, tip_
     return
 
 
+# This function is used to plot a box with text in it
+# It is used e.g. within the code of  "PTFE Market Scheme"
+def plot_box_with_multiline_text(
+    ax,
+    box_center = [80,45],
+    box_height = 10,
+    box_width = 10,
+    box_edgecolor = "black",
+    box_fillcolor = "white",
+    box_linewidth = 1,
+    box_zorder = 30,
+    text_stringlist = [""],
+    text_color = "black",
+    text_fontsize = 11,
+    text_verticalspacing = 5,
+    text_horizontalalignment = "center",
+    text_verticalalignment = "center"):
+
+    # plotting the box
+    x1 = vs(box_center, (-0.5*box_width, +0.5*box_height))
+    x2 = vs(box_center, (+0.5*box_width, +0.5*box_height))
+    x3 = vs(box_center, (+0.5*box_width, -0.5*box_height))
+    x4 = vs(box_center, (-0.5*box_width, -0.5*box_height))
+    p = patches.Polygon([x1,x2,x3,x4], facecolor=box_fillcolor, closed=True, zorder=box_zorder-1)
+    ax.add_patch(p)
+    plot_line_connect_points(
+        points_list = [x1, x2, x3, x4],
+        linewidth = box_linewidth,
+        linecolor = box_edgecolor,
+        flag_connect_last_with_first = True,
+        flag_single_connections = True,
+        input_zorder = box_zorder)
+
+    # printing the text
+    textposlist = [vs(box_center, (0, -n*text_verticalspacing +(len(text_stringlist)-1)*text_verticalspacing*0.5)) for n in range(len(text_stringlist))]
+    #for i in range(len(text_stringlist)):
+    for string,pos in zip(text_stringlist, textposlist):
+        plt.text(
+            x = pos[0],
+            y = pos[1],
+            s = string,
+            horizontalalignment = text_horizontalalignment,
+            verticalalignment = text_verticalalignment,
+            #transform = ax1.transAxes,
+            fontsize = text_fontsize,
+            color = text_color,
+            zorder = box_zorder+1)
+
+    return
+
+
 # function to draw a number onto a scheme
 def draw_number(ax, r, num="42", radius=2.8, circlecolor='black', textcolor='white', textsize=11, izorder=24, num_offset=(0,0)):
     circle = patches.Circle(xy=r, radius=radius, facecolor=circlecolor, zorder=izorder, edgecolor='black', linewidth=1.1)
