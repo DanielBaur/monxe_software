@@ -455,7 +455,7 @@ def monmonxe_display(
             print("#############################################")
             conn = sqlite3.connect(temp_filestring +slow_control_data_filename)
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM {} ORDER BY {} DESC LIMIT 4".format(slow_control_data_tablename, "datetime"))
+            cursor.execute("SELECT * FROM {} ORDER BY {} DESC LIMIT 6".format(slow_control_data_tablename, "datetime"))
             rows = cursor.fetchall()
             dt = str(rows[0][0])
             print("datetime: {}_{}_{}".format(dt[0:8], dt[8:12], dt[12:14]))
