@@ -540,7 +540,12 @@ def plot_radon_trap(
         d_r=15,
         l_r=7,
         h_r=4,
-        input_linecolor="black"
+        charcoal_poslist = [[1,2]],
+        input_linecolor="black",
+        flag_rupture_discs = [False,True][0],
+        color_trap_line = "black",
+        color_trap_fill = "black",
+        charcoal_file = "eh_black_black.png"
     ):
     ### defining important positions
     if orientation == 'below':
@@ -617,24 +622,147 @@ def plot_radon_trap(
     plot_line(start_tuple=b, end_tuple=d, linewidth=lw, linecolor=input_linecolor)
     plot_line(start_tuple=c, end_tuple=d, linewidth=lw, linecolor=input_linecolor)
     # radon trap
-    plot_line(start_tuple=j1, end_tuple=j2, linewidth=lw_f, linecolor=input_linecolor)
-    plot_line(start_tuple=j1, end_tuple=j3, linewidth=lw_f, linecolor=input_linecolor)
-    plot_line(start_tuple=j3, end_tuple=j4, linewidth=lw_f, linecolor=input_linecolor)
-    plot_line(start_tuple=j4, end_tuple=j2, linewidth=lw_f, linecolor=input_linecolor)
-    plot_line(start_tuple=k1, end_tuple=k2, linewidth=lw_f, linecolor=input_linecolor)
-    plot_line(start_tuple=k1, end_tuple=k3, linewidth=lw_f, linecolor=input_linecolor)
-    plot_line(start_tuple=k3, end_tuple=k4, linewidth=lw_f, linecolor=input_linecolor)
-    plot_line(start_tuple=k4, end_tuple=k2, linewidth=lw_f, linecolor=input_linecolor)
-    plot_line(start_tuple=l1, end_tuple=l2, linewidth=lw_f, linecolor=input_linecolor)
-    plot_line(start_tuple=l1, end_tuple=l3, linewidth=lw_f, linecolor=input_linecolor)
-    plot_line(start_tuple=l3, end_tuple=l4, linewidth=lw_f, linecolor=input_linecolor)
-    plot_line(start_tuple=l4, end_tuple=l2, linewidth=lw_f, linecolor=input_linecolor)
+#    poslist = []
+#    for i in range(35):
+#        x = (random.randrange(4,97)/100)*(np.sqrt((j2[0]-j1[0])**2))
+#        y = (random.randrange(4,97)/100)*(np.sqrt((j2[1]-k1[1])**2))
+#        poslist.append(vs(j1,(x,y)))
+#    print(poslist)            charcoal_poslist = poslist_2,
+
+    for i in range(len(charcoal_poslist)):
+        image_onto_plot(
+            filestring = charcoal_file,
+            ax = ax,
+            position = charcoal_poslist[i],
+            pathstring = "./input/",
+            zoom = 0.009,
+            zorder = 24)
+    radon_trap_vessel = patches.Polygon(xy=[j1, j2, k2, k1], closed=True, edgecolor=color_trap_line, facecolor=color_trap_fill, linewidth=lw_f, zorder=23)
+    ax.add_patch(radon_trap_vessel)
     # rupture discs
-    plot_line(start_tuple=m, end_tuple=o, linewidth=lw, linecolor=input_linecolor)
-    plot_line(start_tuple=n, end_tuple=p, linewidth=lw, linecolor=input_linecolor)
-    plot_line(start_tuple=q, end_tuple=z, linewidth=lw, linecolor=input_linecolor)
-    plot_line(start_tuple=s, end_tuple=t, linewidth=lw, linecolor=input_linecolor)
+    if flag_rupture_discs == True:
+        plot_line(start_tuple=m, end_tuple=o, linewidth=lw, linecolor=input_linecolor)
+        plot_line(start_tuple=n, end_tuple=p, linewidth=lw, linecolor=input_linecolor)
+        plot_line(start_tuple=q, end_tuple=z, linewidth=lw, linecolor=input_linecolor)
+        plot_line(start_tuple=s, end_tuple=t, linewidth=lw, linecolor=input_linecolor)
     return
+
+
+# function to plot a schematic radon trap
+# INPUT: see below
+# OUTPUT: none
+#def plot_radon_trap(
+#        ax, # axis
+#        r, # positon of the radon trap; center of the middle valve
+#        lw, # linewidth
+#        w, # width of the radon trap; from left to right vertical gas line
+#        depth, # 'depth' of the radon trap
+#        orientation = 'above', # 'above'--> the vessel is printed ABOVE the y-coordinate of r, 'below'--> the vessel is printed below the y-coordinate of r
+#        # parameters of the cf vessel containing the activated charcoal
+#        d_f=40, # d_f determines the length of the cf vessel containing the activated charcoal
+#        h_f=20, # h_f determines the starting position of the flange
+#        t_f=3, # height of the cf vessel flanges
+#        do_f=7, # diameter of the cf vessel flanges
+#        di_f=5, # diameter of the cylindrical cf vessel
+#        lw_f=3.3, # linewidth of the cf vessel
+#        d_r=15,
+#        l_r=7,
+#        h_r=4,
+#        input_linecolor="black"
+#    ):
+#    ### defining important positions
+#    if orientation == 'below':
+#        # main frame
+#        a = vs(r, (-0.5*w,0)) # upper left corner
+#        b = vs(r, (+0.5*w,0)) # upper right corner
+#        c = vs(a, (0,-depth)) # lower left corner
+#        d = vs(b, (0,-depth)) # lower right corner
+#        u = vs(r, (-w,0)) # left edge of the gas line
+#        v = vs(r, (+w,0)) # right edge of the gas line
+#        # charcoal vessel
+#        i = vs(b,(0,-h_f)) # upper end of the radon trap vessel
+#        h = vs(i,(0,-d_f)) # lower end of the radon trap vessel
+#        j1 = vs(i,(-0.5*do_f,0)) # upper left vertex of upper flange
+#        j2 = vs(i,(+0.5*do_f,0)) # upper right vertex of upper flange
+#        j3 = vs(j1,(0,-t_f)) # lower left vertex of upper flange
+#        j4 = vs(j2,(0,-t_f)) # lower right vertex of upper flange
+#        k1 = vs(h,(-0.5*do_f,0)) # lower left vertex of lower flange
+#        k2 = vs(h,(+0.5*do_f,0)) # lower right vertex of lower flange
+#        k3 = vs(k1,(0,+t_f)) # upper left vertex of lower flange
+#        k4 = vs(k2,(0,+t_f)) # upper right vertex of lower flange
+#        diff = 0.5*(do_f-di_f)
+#        l1 = vs(j3,(+diff,0)) # upper left vertex of central cylinder
+#        l2 = vs(j4,(-diff,0)) # upper right vertex of central cylinder
+#        l3 = vs(k3,(+diff,0)) # lower left vertex of central cylinder
+#        l4 = vs(k4,(-diff,0)) # lower right vertex of central cylinder
+#        # rupture discs
+#        m = vs(a, (0,-d_r)) # position of the left rupture disc
+#        n = vs(b, (0,-d_r)) # position of the right rupture disc
+#        o = vs(m, (-l_r,0)) # end of the left rupture disc
+#        p = vs(n, (+l_r,0)) # end of the right rupture disc
+#        q = vs(m, (-0.5*l_r,+0.5*h_r)) # upper end of the left rupture disc
+#        z = vs(m, (-0.5*l_r,-0.5*h_r)) # lower end of the left rupture disc
+#        s = vs(n, (+0.5*l_r,+0.5*h_r)) # upper end of the right rupture disc
+#        t = vs(n, (+0.5*l_r,-0.5*h_r)) # lower end of the right rupture disc
+#    if orientation == 'above':
+#        # main frame
+#        a = vs(r, (-0.5*w,0)) # upper left corner
+#        b = vs(r, (+0.5*w,0)) # upper right corner
+#        c = vs(a, (0,+depth)) # lower left corner
+#        d = vs(b, (0,+depth)) # lower right corner
+#        u = vs(r, (-w,0)) # left edge of the gas line
+#        v = vs(r, (+w,0)) # right edge of the gas line
+#        # charcoal vessel
+#        i = vs(b,(0-w,+h_f)) # upper end of the radon trap vessel
+#        h = vs(i,(0,+d_f)) # lower end of the radon trap vessel
+#        j1 = vs(i,(-0.5*do_f,0)) # upper left vertex of upper flange
+#        j2 = vs(i,(+0.5*do_f,0)) # upper right vertex of upper flange
+#        j3 = vs(j1,(0,+t_f)) # lower left vertex of upper flange
+#        j4 = vs(j2,(0,+t_f)) # lower right vertex of upper flange
+#        k1 = vs(h,(-0.5*do_f,0)) # lower left vertex of lower flange
+#        k2 = vs(h,(+0.5*do_f,0)) # lower right vertex of lower flange
+#        k3 = vs(k1,(0,-t_f)) # upper left vertex of lower flange
+#        k4 = vs(k2,(0,-t_f)) # upper right vertex of lower flange
+#        diff = 0.5*(do_f-di_f)
+#        l1 = vs(j3,(+diff,0)) # upper left vertex of central cylinder
+#        l2 = vs(j4,(-diff,0)) # upper right vertex of central cylinder
+#        l3 = vs(k3,(+diff,0)) # lower left vertex of central cylinder
+#        l4 = vs(k4,(-diff,0)) # lower right vertex of central cylinder
+#        # rupture discs
+#        m = vs(a, (0,+d_r)) # position of the left rupture disc
+#        n = vs(b, (0,+d_r)) # position of the right rupture disc
+#        o = vs(m, (-l_r,0)) # end of the left rupture disc
+#        p = vs(n, (+l_r,0)) # end of the right rupture disc
+#        q = vs(m, (-0.5*l_r,-0.5*h_r)) # upper end of the left rupture disc
+#        z = vs(m, (-0.5*l_r,+0.5*h_r)) # lower end of the left rupture disc
+#        s = vs(n, (+0.5*l_r,-0.5*h_r)) # upper end of the right rupture disc
+#        t = vs(n, (+0.5*l_r,+0.5*h_r)) # lower end of the right rupture disc
+#    ### plotting
+#    # pipes
+#    plot_line(start_tuple=u, end_tuple=v, linewidth=lw, linecolor=input_linecolor)
+#    plot_line(start_tuple=a, end_tuple=i, linewidth=lw, linecolor=input_linecolor)
+#    plot_line(start_tuple=h, end_tuple=c, linewidth=lw, linecolor=input_linecolor)
+#    plot_line(start_tuple=b, end_tuple=d, linewidth=lw, linecolor=input_linecolor)
+#    plot_line(start_tuple=c, end_tuple=d, linewidth=lw, linecolor=input_linecolor)
+#    # radon trap
+#    plot_line(start_tuple=j1, end_tuple=j2, linewidth=lw_f, linecolor=input_linecolor)
+#    plot_line(start_tuple=j1, end_tuple=j3, linewidth=lw_f, linecolor=input_linecolor)
+#    plot_line(start_tuple=j3, end_tuple=j4, linewidth=lw_f, linecolor=input_linecolor)
+#    plot_line(start_tuple=j4, end_tuple=j2, linewidth=lw_f, linecolor=input_linecolor)
+#    plot_line(start_tuple=k1, end_tuple=k2, linewidth=lw_f, linecolor=input_linecolor)
+#    plot_line(start_tuple=k1, end_tuple=k3, linewidth=lw_f, linecolor=input_linecolor)
+#    plot_line(start_tuple=k3, end_tuple=k4, linewidth=lw_f, linecolor=input_linecolor)
+#    plot_line(start_tuple=k4, end_tuple=k2, linewidth=lw_f, linecolor=input_linecolor)
+#    plot_line(start_tuple=l1, end_tuple=l2, linewidth=lw_f, linecolor=input_linecolor)
+#    plot_line(start_tuple=l1, end_tuple=l3, linewidth=lw_f, linecolor=input_linecolor)
+#    plot_line(start_tuple=l3, end_tuple=l4, linewidth=lw_f, linecolor=input_linecolor)
+#    plot_line(start_tuple=l4, end_tuple=l2, linewidth=lw_f, linecolor=input_linecolor)
+#    # rupture discs
+#    plot_line(start_tuple=m, end_tuple=o, linewidth=lw, linecolor=input_linecolor)
+#    plot_line(start_tuple=n, end_tuple=p, linewidth=lw, linecolor=input_linecolor)
+#    plot_line(start_tuple=q, end_tuple=z, linewidth=lw, linecolor=input_linecolor)
+#    plot_line(start_tuple=s, end_tuple=t, linewidth=lw, linecolor=input_linecolor)
+#    return
 
 
 # This function is used to plot a circle.
@@ -686,7 +814,10 @@ def plot_circle(center=(0,0), radius=1, phicoverage=(0,2), linewidth=2, linecolo
         return points_list
     else:
         plt.plot( x_list, y_list, linewidth=linewidth, color=linecolor, zorder=izorder)
-        return
+        points_list = []
+        for i in range(len(x_list)):
+            points_list.append((x_list[i], y_list[i]))
+        return points_list
 
 
 # function to draw an electrical field line into the radon emanation chamber scheme
@@ -727,14 +858,29 @@ def draw_field_line(ax, rsp_x, rep_x, x1_length, x2_length, anchor, diode_thickn
     return
 
 
-def gen_position_list(arrow_start, arrow_end, i_bottom, i_top, num=50):
+def gen_position_list(
+    track_start,
+    track_end,
+    y_dist_max,
+    num=50
+):
     pos_list = []
+    dir_vec = vs(track_end, (-track_start[0], -track_start[1]))
     for i in range(num):
-        x = random.randrange(int(round(arrow_end[0]*100,0)), int(round(arrow_start[0]*100,0))+1, 1)/100
-        y_hole = random.randrange(int(round((i_top-2.3)*100,0)), int(round((i_top+0.3)*100,0))+1, 1)/100
-        y_electron = random.randrange(int(round((i_bottom-0.3)*100,0)), int(round((i_bottom+2.3)*100,0))+1, 1)/100
-        pos_list.append((x, y_hole, y_electron))
+        rand_scale_y_dist = random.randrange(0,100)/100
+        rand_scale_xy_dist = random.randrange(-10,95)/100
+        xy = vs(track_start, (rand_scale_xy_dist*dir_vec[0], rand_scale_xy_dist*dir_vec[1]))
+        xy = vs(xy, (0, rand_scale_y_dist*y_dist_max))
+        pos_list.append((xy[0], xy[1], xy[1]-2*rand_scale_y_dist*y_dist_max))
     return pos_list
+#def gen_position_list(arrow_start, arrow_end, i_bottom, i_top, num=50):
+#    pos_list = []
+#    for i in range(num):
+#        x = random.randrange(int(round(arrow_end[0]*100,0)), int(round(arrow_start[0]*100,0))+1, 1)/100
+#        y_hole = random.randrange(int(round((i_top-2.3)*100,0)), int(round((i_top+0.3)*100,0))+1, 1)/100
+#        y_electron = random.randrange(int(round((i_bottom-0.3)*100,0)), int(round((i_bottom+2.3)*100,0))+1, 1)/100
+#        pos_list.append((x, y_hole, y_electron))
+#    return pos_list
 
 
 # function to draw an arrow indicating the direction of movement onto the rec scheme
@@ -771,7 +917,9 @@ def plot_vessel(
         vessel_height = 50, # height of the rectangular vessel
         vessel_width = 50, # width of the rectangular vessel
         vessel_lw = 3,
-        input_linecolor = "black"
+        input_linecolor = "black",
+        color_vessel_fill = "blue",
+        color_vessel_line = "red"
     ):
     ### defining important positions
     # pipes
@@ -803,21 +951,25 @@ def plot_vessel(
     plot_line(start_tuple=b, end_tuple=d, linewidth=pipes_lw, linecolor=input_linecolor)
     # vessel
     if shape == 'rectangle':
-        plot_line(start_tuple=e, end_tuple=f, linewidth=vessel_lw, linecolor=input_linecolor)
-        plot_line(start_tuple=f, end_tuple=g, linewidth=vessel_lw, linecolor=input_linecolor)
-        plot_line(start_tuple=g, end_tuple=h, linewidth=vessel_lw, linecolor=input_linecolor)
-        plot_line(start_tuple=h, end_tuple=e, linewidth=vessel_lw, linecolor=input_linecolor)
+#        plot_line(start_tuple=e, end_tuple=f, linewidth=vessel_lw, linecolor=input_linecolor)
+#        plot_line(start_tuple=f, end_tuple=g, linewidth=vessel_lw, linecolor=input_linecolor)
+#        plot_line(start_tuple=g, end_tuple=h, linewidth=vessel_lw, linecolor=input_linecolor)
+#        plot_line(start_tuple=h, end_tuple=e, linewidth=vessel_lw, linecolor=input_linecolor)
+        points_list = [e,f,g,h]
     elif shape == 'hemisphere':
-        plot_line(start_tuple=e, end_tuple=f, linewidth=vessel_lw, linecolor=input_linecolor)
-        plot_line(start_tuple=f, end_tuple=g, linewidth=vessel_lw, linecolor=input_linecolor)
-        #plot_line(start_tuple=g, end_tuple=h, linewidth=vessel_lw)
-        plot_line(start_tuple=h, end_tuple=e, linewidth=vessel_lw, linecolor=input_linecolor)
+#        plot_line(start_tuple=e, end_tuple=f, linewidth=vessel_lw, linecolor=input_linecolor)
+#        plot_line(start_tuple=f, end_tuple=g, linewidth=vessel_lw, linecolor=input_linecolor)
+#        plot_line(start_tuple=h, end_tuple=e, linewidth=vessel_lw, linecolor=input_linecolor)
+        points_list = [g,f,e,h]
         if orientation == 'above':
-            plot_circle(center=z, radius=0.5*vessel_width, phicoverage=(0,1), linewidth=vessel_lw, linecolor=input_linecolor, numberofpoints=1000, izorder=32)
+            circle_points = plot_circle(center=z, radius=0.5*vessel_width, phicoverage=(0,1), linewidth=vessel_lw, linecolor=input_linecolor, numberofpoints=1000, izorder=32, flag_plot_circle=False, flag_return_points_list = True)
         if orientation == 'below':
-            plot_circle(center=z, radius=0.5*vessel_width, phicoverage=(1,2), linewidth=vessel_lw, linecolor=input_linecolor, numberofpoints=1000, izorder=32)
-    elif shape == 'hemisphere_without_vessel':
-        print("no hemispherical vessel printed")
+            circle_points = plot_circle(center=z, radius=0.5*vessel_width, phicoverage=(1,2), linewidth=vessel_lw, linecolor=input_linecolor, numberofpoints=1000, izorder=32, flag_plot_circle=False, flag_return_points_list = True)
+        points_list = points_list +circle_points
+    vessel = patches.Polygon(xy=points_list, closed=True, edgecolor=color_vessel_line, facecolor=color_vessel_fill, linewidth=vessel_lw, zorder=32)
+    ax.add_patch(vessel)
+    #elif shape == 'hemisphere_without_vessel':
+    #    print("no hemispherical vessel printed")
         #plot_line(start_tuple=e, end_tuple=f, linewidth=vessel_lw)
         #plot_line(start_tuple=f, end_tuple=g, linewidth=vessel_lw)
         #plot_line(start_tuple=g, end_tuple=h, linewidth=vessel_lw)

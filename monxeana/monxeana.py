@@ -117,7 +117,7 @@ isotope_dict = {
         "q_value_kev" : 6114.68,
         "alpha_energy_kev" : 6002.35,
         "decay_constant" : np.log(2)/(3.071 *60),
-        "color" : "#6700ad", # 1/5 in color gradient (https://colordesigner.io/gradient-generator) from "#6700ad" (purple) to "d11166" (wine red)
+        "color" : "#005dff", # (https://colordesigner.io/gradient-generator)
         "latex_label" : r"$^{218}\,\mathrm{Po}$",
     },
     "po216" : {
@@ -126,7 +126,7 @@ isotope_dict = {
         "decay_constant" : np.log(2)/(0.148),
         "q_value_kev" : 6906.3,
         "alpha_energy_kev" : 6778.4,
-        "color" : "#93009b", # 2/5 in color gradient (https://colordesigner.io/gradient-generator) from "#6700ad" (purple) to "d11166" (wine red)
+        "color" : "#93009b",
         "latex_label" : r"$^{216}\,\mathrm{Po}$",
     },
     "po214" : {
@@ -135,7 +135,7 @@ isotope_dict = {
         "decay_constant" : np.log(2)/(162.3 *10**(-6)),
         "q_value_kev" : 7833.46,
         "alpha_energy_kev" : 7686.82,
-        "color" : "#b10088", # 3/5 in color gradient (https://colordesigner.io/gradient-generator) from "#6700ad" (purple) to "d11166" (wine red)
+        "color" : "#ab00ff",
         "latex_label" : r"$^{214}\,\mathrm{Po}$",
     },
     "po212" : {
@@ -144,7 +144,7 @@ isotope_dict = {
         "q_value_kev" : 8954.12,
         "alpha_energy_kev" : 8785.17,
         "decay_constant" : np.log(2)/(300 *10**(-9)),
-        "color" : '#c40076', # 4/5 in color gradient (https://colordesigner.io/gradient-generator) from "#6700ad" (purple) to "d11166" (wine red)
+        "color" : '#c40076',
         "latex_label" : r"$^{212}\,\mathrm{Po}$",
     },
     "po210" : {
@@ -153,7 +153,7 @@ isotope_dict = {
         "q_value_kev" : 5407.45,
         "alpha_energy_kev" : 5304.33,
         "decay_constant" : np.log(2)/(138.3763 *24 *60 *60),
-        "color" : '#d11166', # 5/5 in color gradient (https://colordesigner.io/gradient-generator) from "#6700ad" (purple) to "d11166" (wine red)
+        "color" : '#e30071',
         "latex_label" : r"$^{226}\,\mathrm{Ra}$",
     },
     # lead
@@ -1122,6 +1122,8 @@ def plot_peak_data(
         "flag_plot_errors" : [False, True][0],
         "flag_plot_fits" : ["none", "all", "known", "po218+po214"][3],
         "flag_preliminary" : [True, False][0],
+        "flag_show_isotope_windows" : [False,True][1],
+        "flag_show_peak_labels" : [False, True][1]
     }
 ):
 
@@ -1169,14 +1171,15 @@ def plot_peak_data(
         label="fdfa")
 
     # plotting the Poissonian errors
-    plt.fill_between(
-        bin_centers if plot_settings_dict["flag_x_axis_units"]=="adc_channels" else [plot_settings_dict["energy_channel_relation"](xi, *p_opt) for xi in bin_centers],
-        counts-counts_errors_lower,
-        counts+counts_errors_upper,
-        color = color_histogram_error,
-        alpha = 1,
-        zorder = 0,
-        interpolate = True)
+    if plot_settings_dict["flag_plot_errors"]:
+        plt.fill_between(
+            bin_centers if plot_settings_dict["flag_x_axis_units"]=="adc_channels" else [plot_settings_dict["energy_channel_relation"](xi, *p_opt) for xi in bin_centers],
+            counts-counts_errors_lower,
+            counts+counts_errors_upper,
+            color = color_histogram_error,
+            alpha = 1,
+            zorder = 0,
+            interpolate = True)
 
     ### plotting the fits
     if plot_settings_dict["flag_plot_fits"] != "none":
@@ -1195,7 +1198,7 @@ def plot_peak_data(
             plt.plot(
                 fit_data_x_vals if plot_settings_dict["flag_x_axis_units"]=="adc_channels" else [plot_settings_dict["energy_channel_relation"](xi, *p_opt) for xi in fit_data_x_vals],
                 [function_crystal_ball_one(adcc, **measurement_data_dict["peak_data"][peaknum]["fit_data"]) for adcc in fit_data_x_vals],
-                linewidth = 0.5,
+                linewidth = 1.5,
                 color = isotope_dict[measurement_data_dict["peak_data"][peaknum]["a_priori"]["isotope"]]["color"] if "a_priori" in [*measurement_data_dict["peak_data"][peaknum]] else color_monxe_cyan,
                 linestyle = '-',
                 zorder = 1,
@@ -1203,6 +1206,8 @@ def plot_peak_data(
 
 
     ### annotations
+    all_peaks = [*measurement_data_dict["peak_data"]]
+    known_peaks = [peaknum for peaknum in all_peaks if "a_priori" in [*measurement_data_dict["peak_data"][peaknum]]]
     # annotationg the MonXe logo
     #miscfig.image_onto_plot(
     #    filestring = "monxe_logo__transparent_bkg.png",
@@ -1212,30 +1217,17 @@ def plot_peak_data(
     #    zoom=0.02,
     #    zorder=0)
     # peak labels
-    #for key in [k for k in list(peak_data_dict.keys()) if "isotope_data" in peak_data_dict[k]]:
-    #    plt.text(
-    #        x = peak_data_dict[key]["fit_data"]["mu"] -0.02*x_width if plot_settings_dict["flag_x_axis_units"]=="adc_channels" else plot_settings_dict["energy_channel_relation"](peak_data_dict[key]["fit_data"]["mu"] -0.02*x_width, *p_opt),
-    #        y = 1.02*monxeana.function_crystal_ball_one(x=peak_data_dict[key]["fit_data"]["mu"], **peak_data_dict[key]["fit_data"]),
-    #        #transform = ax1.transAxes,
-    #        s = r"$" +peak_data_dict[key]["isotope_data"]["latex_label"] +r"$",
-    #        color = "black",
-    #        fontsize = 11,
-    #        verticalalignment = 'center',
-    #        horizontalalignment = 'right')
-    # extracted counts
-    #adc_selection_window_left = 1000
-    #adc_selection_window_right = 250
-    #for key in [k for k in list(peak_data_dict.keys()) if "isotope_data" in peak_data_dict[k]]:
-    #    if peak_data_dict[key]["isotope_data"]["label"] in ["po218", "po214"]:
-    #        left_border_adcc = peak_data_dict[key]["fit_data"]["mu"]-adc_selection_window_left
-    #        right_border_adcc = peak_data_dict[key]["fit_data"]["mu"]+adc_selection_window_right
-    #        ax1.axvspan(
-    #            left_border_adcc if plot_settings_dict["flag_x_axis_units"]=="adc_channels" else plot_settings_dict["energy_channel_relation"](left_border_adcc, *p_opt),
-    #            right_border_adcc if plot_settings_dict["flag_x_axis_units"]=="adc_channels" else plot_settings_dict["energy_channel_relation"](right_border_adcc, *p_opt),
-    #            alpha = 0.5,
-    #            linewidth = 0,
-    #            color = monxeana.isotope_dict[peak_data_dict[key]["isotope_data"]["label"]]["color"],
-    #            zorder = -50)
+    if plot_settings_dict["flag_show_peak_labels"] == True:
+        for peaknum in known_peaks:
+            plt.text(
+                x = measurement_data_dict["peak_data"][peaknum]["fit_data"]["mu"] -0.02*x_width if plot_settings_dict["flag_x_axis_units"]=="adc_channels" else plot_settings_dict["energy_channel_relation"](measurement_data_dict["peak_data"][peaknum]["fit_data"]["mu"] -0.02*x_width, *p_opt),
+                y = 1.02*function_crystal_ball_one(x=measurement_data_dict["peak_data"][peaknum]["fit_data"]["mu"], **measurement_data_dict["peak_data"][peaknum]["fit_data"]),
+                #transform = ax1.transAxes,
+                s = r"$" +isotope_dict[measurement_data_dict["peak_data"][peaknum]["a_priori"]["isotope"]]["latex_label"] +r"$",
+                color = "black",
+                fontsize = 11,
+                verticalalignment = 'center',
+                horizontalalignment = 'right')
     # shading the fit region
     #ax1.axvspan(
     #    fitrange[0] if plot_settings_dict["flag_x_axis_units"]=="adc_channels" else plot_settings_dict["energy_channel_relation"](fitrange[0], *p_opt),
@@ -1244,14 +1236,17 @@ def plot_peak_data(
     #    linewidth = 0,
     #    color = 'grey',
     #    zorder = -50)
-    #for key in ["3", "4"]:
-    #    ax1.axvspan(
-    #        peak_data_dict[key]["counts"]["left_border_adc"] if plot_settings_dict["flag_x_axis_units"]=="adc_channels" else plot_settings_dict["energy_channel_relation"](, *p_opt),
-    #        peak_data_dict[key]["counts"]["right_border_adc"] if plot_settings_dict["flag_x_axis_units"]=="adc_channels" else plot_settings_dict["energy_channel_relation"](, *p_opt),
-    #        alpha = 0.5,
-    #        linewidth = 0,
-    #        color = "purple" if key=="3" else "green",
-    #        zorder = -50)
+    # shading the isotope windows (i.e., the extracted counts)
+    if "activity_data" in [*measurement_data_dict] and plot_settings_dict["flag_show_isotope_windows"] == True:
+        for peaknum in known_peaks:
+            isotope_window_adcc = measurement_data_dict["activity_data"]["decay_model_fit_results"][measurement_data_dict["peak_data"][peaknum]["a_priori"]["isotope"]]["window_adcc"]
+            ax1.axvspan(
+                isotope_window_adcc[0] if plot_settings_dict["flag_x_axis_units"] == "adc_channels" else plot_settings_dict["energy_channel_relation"](isotope_window_adcc[0], *p_opt),
+                isotope_window_adcc[1] if plot_settings_dict["flag_x_axis_units"] == "adc_channels" else plot_settings_dict["energy_channel_relation"](isotope_window_adcc[1], *p_opt),
+                alpha = 0.5,
+                linewidth = 0,
+                color = isotope_dict[measurement_data_dict["peak_data"][peaknum]["a_priori"]["isotope"]]["color"],
+                zorder = -50)
     # measurement comments
     #monxeana.annotate_comments(
     #    comment_ax = ax1,
@@ -1275,15 +1270,16 @@ def plot_peak_data(
     #    verticalalignment = 'center',
     #    horizontalalignment = 'right')
     # marking as 'preliminary'
-    plt.text(
-        x = 0.97,
-        y = 0.95,
-        transform = ax1.transAxes,
-        s = "preliminary",
-        color = "red",
-        fontsize = 13,
-        verticalalignment = 'center',
-        horizontalalignment = 'right')
+    if plot_settings_dict["flag_preliminary"] == True:
+        plt.text(
+            x = 0.97,
+            y = 0.95,
+            transform = ax1.transAxes,
+            s = "preliminary",
+            color = "red",
+            fontsize = 13,
+            verticalalignment = 'center',
+            horizontalalignment = 'right')
     # legend
     #plt.legend()
 
@@ -1571,6 +1567,7 @@ def get_activity_data_dict(
         "decay_model_fit_settings" : decay_model_fit_settings_dict,
         "decay_model_fit_results" : {
             "po218" : {
+                "window_adcc" : [adcc_selection_window_po218_left, adcc_selection_window_po218_right],
                 "timestamp_centers_seconds" : timestamp_centers_seconds,
                 "decays_per_activity_interval" : decays_per_activity_interval_po218,
                 "decays_per_activity_interval_errors_lower" : decays_per_activity_interval_po218_errors_lower,
@@ -1587,6 +1584,7 @@ def get_activity_data_dict(
                 "r_error" : po218_r_error
             },
             "po214" : {
+                "window_adcc" : [adcc_selection_window_po214_left, adcc_selection_window_po214_right],
                 "timestamp_centers_seconds" : timestamp_centers_seconds,
                 "decays_per_activity_interval" : decays_per_activity_interval_po214,
                 "decays_per_activity_interval_errors_lower" : decays_per_activity_interval_po214_errors_lower,
