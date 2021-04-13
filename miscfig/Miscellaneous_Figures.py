@@ -177,7 +177,15 @@ def plot_line(start_tuple, end_tuple, linewidth=2, linecolor='black', **kwargs):
 
 
 # This function is used to connect a list of points with each other utilizing the 'plot_line' function defined above.
-def plot_line_connect_points(points_list, linewidth=2, linecolor="black", flag_connect_last_with_first=True, flag_single_connections=False, input_zorder=30):
+def plot_line_connect_points(
+    points_list,
+    linewidth = 2,
+    linestyle = "-",
+    linecolor = "black",
+    flag_connect_last_with_first = True,
+    flag_single_connections = False,
+    input_zorder=30):
+
     x_list = []
     y_list = []
     # generating the lists of x and y coordinates of the points within the passed list
@@ -191,9 +199,9 @@ def plot_line_connect_points(points_list, linewidth=2, linecolor="black", flag_c
     # plotting the line connecting the dots
     if flag_single_connections == True:
         for i in range(len(x_list)-1):
-            plt.plot( [x_list[i], x_list[i+1]], [y_list[i], y_list[i+1]], linewidth=linewidth, color=linecolor, zorder=input_zorder)
+            plt.plot( [x_list[i], x_list[i+1]], [y_list[i], y_list[i+1]], linewidth=linewidth, linestyle=linestyle, color=linecolor, zorder=input_zorder)
     else:
-        plt.plot( x_list, y_list, linewidth=linewidth, color=linecolor, zorder=input_zorder)
+        plt.plot( x_list, y_list, linewidth=linewidth, linestyle=linestyle, color=linecolor, zorder=input_zorder)
     return
 
 
@@ -240,7 +248,17 @@ def annotate_image_with_arrow(
 
 
 # This function is used to draw an arrow from a list of points
-def plot_arrow_connect_points(ax, points_list, linewidth, color, tip_width, tip_length, flag_single_connections=True, input_zorder=30):
+def plot_arrow_connect_points(
+    ax,
+    points_list,
+    linewidth,
+    color,
+    tip_width,
+    tip_length,
+    linestyle = "-",
+    flag_single_connections = True,
+    input_zorder = 30):
+
     # modifying the last point in the list so the tip of the arrow tip ends at the last point in 'points_list'
     line_points = points_list[:-1]
     recessed_point = scale_vec(norm_vec(two_tuple_vector=vs(points_list[len(points_list)-1], (-points_list[len(points_list)-2][0], -points_list[len(points_list)-2][1]))), tip_length)
@@ -253,7 +271,7 @@ def plot_arrow_connect_points(ax, points_list, linewidth, color, tip_width, tip_
     tip_right_point = vs(tip_center, scale_vec(n, -0.5*tip_width))
     tip_points = [tip_endpoint, tip_left_point, tip_right_point]
     # plotting
-    plot_line_connect_points(points_list=line_points, linewidth=linewidth, linecolor=color, flag_connect_last_with_first=False, flag_single_connections=flag_single_connections, input_zorder = input_zorder)
+    plot_line_connect_points(points_list=line_points, linewidth=linewidth, linestyle=linestyle, linecolor=color, flag_connect_last_with_first=False, flag_single_connections=flag_single_connections, input_zorder = input_zorder)
     p = patches.Polygon(tip_points, facecolor=color, closed=True, zorder = input_zorder)
     ax.add_patch(p)
     return
@@ -384,7 +402,23 @@ def stringfunc(pct,data):
 #    align_horizontally (bool): If True the arrow label is printed horizontally instead of parallel to the arrow. Also dfa is used to shift the arrow label towards the left/right.
 # OUTPUT:
 #    none
-def label_arrow(a, b, ax, ts='', fs=19, c='black', stringcolor='black', dfa=1.5, a_hl=0.8, a_hw=0.8, a_tw=0.2, a_ms=12, add_rot=0, align_horizontally = False, zorder=20):
+def label_arrow(
+    a,
+    b,
+    ax,
+    ts = '', # label text string
+    fs = 19, # label text font size
+    c = 'black', # arrow color
+    stringcolor = 'black', # text color
+    dfa = 1.5,
+    a_hl = 0.8,
+    a_hw = 0.8,
+    a_tw = 0.2,
+    a_ms = 12,
+    add_rot = 0,
+    align_horizontally = False,
+    zorder=20):
+
     # sanity check
     if a == b:
         print('You tried to plot an arrow pointing from ({},{}) to ({},{}).'.format(a[0],a[1],b[0],b[1]))
@@ -393,7 +427,7 @@ def label_arrow(a, b, ax, ts='', fs=19, c='black', stringcolor='black', dfa=1.5,
         return
     # drawing a custom arrow onto the plot
     custom = patches.ArrowStyle('simple', head_length=a_hl, head_width=a_hw, tail_width=a_tw)
-    arrow = patches.FancyArrowPatch(posA=a, posB=b, color=c, shrinkA=1, shrinkB=1, arrowstyle=custom, mutation_scale=a_ms, linewidth=0.01, zorder=zorder)
+    arrow = patches.FancyArrowPatch(posA=a, posB=b, color=c, shrinkA=1, shrinkB=1, arrowstyle=custom, mutation_scale=a_ms, linewidth=0.01, linestyle="--", zorder=zorder)
     ax.add_patch(arrow)
     ### determining both the position and orientation of the text
     # gemetric quantities
@@ -1029,6 +1063,17 @@ data_dtype = np.dtype([
 
 isotopes_dict = {
 
+    "U_238" : {
+        "namestring" : "$\\boldsymbol{^{238}\mathrm{U}}$",
+        "n" : 146,
+        "z" : 92,
+        "t_h" : '',
+        "t_h_det" : '',
+        "decay" : '',
+        "e_alpha" : '',
+        "e_alpha_det" : ''
+    },
+
     "Ra_226" : {
         "namestring" : "$\\boldsymbol{^{226}\mathrm{Ra}}$",
         "n" : 138,
@@ -1227,7 +1272,7 @@ def plot_isotope_box(
     halflifestringstring_offset=(0,0),
     boxcolor='cyan',
     fs=20,
-    col = "black"):
+    col = "black",):
 
     box = patches.Rectangle(xy=(n,z), width=1, height=1, angle=0.0, linewidth=1, edgecolor='black', facecolor=boxcolor, zorder=30)
     ax.add_patch(box)
@@ -1238,13 +1283,26 @@ def plot_isotope_box(
 
 # This function is used to plot an arrow representing an alpha decay onto a plt.figure.
 # USAGE: plot_decaybox()
-def plot_alphaarrow(ax, n, z, energy, fs=20, arrowcolor='black', stringcolor='black', br=100):
+def plot_alphaarrow(
+    ax,
+    n,
+    z,
+    energy,
+    fs = 20,
+    arrowcolor = 'black',
+    stringcolor = 'black',
+    br = 100,
+    flag_label = True):
     # correcting for the tiny littly offset between the arrows and the isotope boxes
     n = n +0.03
     z = z +0.03
     # printing the arrows
-    label_arrow(a=(n,z), b=vs((n,z),(-1,-1)), ax=ax, ts='$\\alpha$', fs=fs, c=arrowcolor, stringcolor=stringcolor, dfa=0.17, a_hl=0.8, a_hw=0.8, a_tw=0.2, a_ms=3, add_rot=0, align_horizontally=False, zorder=20)
-    label_arrow(a=(n,z), b=vs((n,z),(-1,-1)), ax=ax, ts=energy, fs=0.7*fs, c=arrowcolor, stringcolor=stringcolor, dfa=-0.17, a_hl=0.8, a_hw=0.8, a_tw=0.2, a_ms=3, add_rot=0, align_horizontally=False, zorder=20)
+    if flag_label == True:
+        label_arrow(a=(n,z), b=vs((n,z),(-1,-1)), ax=ax, ts='$\\alpha$', fs=fs, c=arrowcolor, stringcolor=stringcolor, dfa=0.17, a_hl=0.8, a_hw=0.8, a_tw=0.2, a_ms=3, add_rot=0, align_horizontally=False, zorder=20)
+        label_arrow(a=(n,z), b=vs((n,z),(-1,-1)), ax=ax, ts=energy, fs=0.7*fs, c=arrowcolor, stringcolor=stringcolor, dfa=-0.17, a_hl=0.8, a_hw=0.8, a_tw=0.2, a_ms=3, add_rot=0, align_horizontally=False, zorder=20)
+    else:
+        label_arrow(a=(n,z), b=vs((n,z),(-1,-1)), ax=ax, ts='', fs=fs, c=arrowcolor, stringcolor=stringcolor, dfa=0.17, a_hl=0.8, a_hw=0.8, a_tw=0.2, a_ms=3, add_rot=0, align_horizontally=False, zorder=20)
+        label_arrow(a=(n,z), b=vs((n,z),(-1,-1)), ax=ax, ts='', fs=0.7*fs, c=arrowcolor, stringcolor=stringcolor, dfa=-0.17, a_hl=0.8, a_hw=0.8, a_tw=0.2, a_ms=3, add_rot=0, align_horizontally=False, zorder=20)
     if br != 100:
         label_arrow(a=(n,z), b=vs((n,z),(-1,-1)), ax=ax, ts=br, fs=0.7*fs, c=arrowcolor, stringcolor=stringcolor, dfa=-0.44, a_hl=0.8, a_hw=0.8, a_tw=0.2, a_ms=3, add_rot=0, align_horizontally=False, zorder=20)
     #arrow = patches.Arrow(x=n, y=z, dx=-1, dy=-1, width=0.1, color='black')
@@ -1284,20 +1342,23 @@ def plot_decaybox(
     dbfs=11,
     textcolor="black",
     arrowcolor='black',
-    labelcolor='black'):
+    labelcolor='black',
+    flag_plotarrow = True):
 
     # modifying the 'n' and 'z' value via sd() in order to match the definition of 'plot_alphaarrow', 'plot_betaarrow' and 'plot_decaybox'
     dictionary = sd(d=dictionary.copy(), sn=-0.5, sz=-0.5)
     # drawing the arrows
-    if dictionary["decay"]=="alpha":
+    if dictionary["decay"]=="alpha" and flag_plotarrow==True:
         if "br_alpha" in dictionary.keys():
             plot_alphaarrow(ax=dbax, n=dictionary["n"], z=dictionary["z"], energy=dictionary["e_alpha"], fs=dbfs, arrowcolor=arrowcolor, stringcolor=labelcolor, br=dictionary["br_alpha"])
         else:
             plot_alphaarrow(ax=dbax, n=dictionary["n"], z=dictionary["z"], energy=dictionary["e_alpha"], fs=dbfs, arrowcolor=arrowcolor, stringcolor=labelcolor)
-    if dictionary["decay"]=="beta-":
+    elif dictionary["decay"]=="beta-" and flag_plotarrow==True:
         plot_betaarrow(ax=dbax, n=dictionary["n"], z=dictionary["z"], fs=dbfs, arrowcolor=arrowcolor, stringcolor=labelcolor)
-    if dictionary["decay"]=="beta+":
+    elif dictionary["decay"]=="beta+" and flag_plotarrow==True:
         plot_betaplusarrow(ax=dbax, n=dictionary["n"], z=dictionary["z"], fs=dbfs, arrowcolor=arrowcolor, stringcolor=labelcolor)
+    elif dictionary["decay"]=="" and flag_plotarrow==True:
+        plot_alphaarrow(ax=dbax, n=dictionary["n"], z=dictionary["z"], energy="", fs=dbfs, arrowcolor=arrowcolor, stringcolor=labelcolor, flag_label=False)
     # drawing the isotope box
     plot_isotope_box(ax=dbax, n=dictionary["n"], z=dictionary["z"], namestring=dictionary["namestring"], halflifestring=dictionary["t_h"], namestring_offset=dbnamestring_offset, halflifestringstring_offset=dbhalflifestringstring_offset, boxcolor=dbboxcolor, fs=dbfs, col=textcolor)
 

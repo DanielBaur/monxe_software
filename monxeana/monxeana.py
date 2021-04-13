@@ -55,7 +55,7 @@ elif username == "monxe":
 else:
     abspath_monxe = "./"
 abspath_measurements = abspath_monxe +"monxe_measurements/"
-relpath_data_compass = "./data/DAQ/run/RAW/" # this is the folder where CoMPASS stores the measurement data
+relpath_data_compass = "./DAQ/run/RAW/" # this is the folder where CoMPASS stores the measurement data
 
 
 # filenames
