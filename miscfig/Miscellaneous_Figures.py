@@ -33,6 +33,10 @@ from matplotlib.offsetbox import TextArea, DrawingArea, OffsetImage, AnnotationB
 input_pathstring = "./input/"
 output_pathstring = "./output/"
 pathstring_thesis_images = "/home/daniel/Desktop/arbeitsstuff/20200720__thesis/images/miscfigimages/"
+abspath_mastertalk_images = "/home/daniel/Desktop/arbeitsstuff/20210416__mastertalk/images/"
+abspath_miscfig = "/home/daniel/Desktop/arbeitsstuff/monxe/software/miscfig/"
+relpath_input = "./input/"
+relpath_output = "./output/"
 
 
 # colors
@@ -41,20 +45,33 @@ uni_red = '#C1002A'
 
 
 colorstring_darwin_blue = '#004A9B'
-standard_figsize = (5.670, 3.189)
+
+standard_miscfig_scale = 160
+standard_figsize = (5.670, 3.189) # corresponds to full thesis textwidth in inch in 16:9 format
+standard_figsize_x_inch = 5.670 # corresponds to full thesis textwidth in inch
+
+standard_width = 160
 
 image_format_dict = {
     "16_9" : {
         "figsize" : standard_figsize,
-        "axes" : (160, 90)
+        "axes" : (standard_width, 9/16 *standard_width)
+    },
+    "monxe_thesis_photograph" : {
+        "figsize" : [standard_figsize[0], standard_figsize[1]],
+        "axes" : (standard_width, 9/16 *standard_width)
     },
     "talk" : {
         "figsize" : (standard_figsize[0], standard_figsize[1]*(75/90)),
-        "axes" : (160, 75)
+        "axes" : (standard_width, 7.5/16 *standard_width)
+    },
+    "talk_slim" : {
+        "figsize" : (standard_figsize[0], standard_figsize[1]*(65/90)),
+        "axes" : (standard_width, 6.5/16 *standard_width)
     },
     "paper" : {
         "figsize" : (standard_figsize[0], standard_figsize[1]*(75/90)),
-        "axes" : (160, 90)
+        "axes" : (standard_width, 7.5/16 *standard_width)
     }
 }
 
@@ -105,6 +122,96 @@ def datestring():
 # function to return timestring (e.g.: 1725 for 17:25h)
 def timestring():
     return str(datetime.datetime.now().time().hour).zfill(2) + str(datetime.datetime.now().time().minute).zfill(2)
+
+
+def convert_string_to_ordinal(input_string):
+    if input_string[-1] in ["1"]:
+        ordinal_string = "st"
+    elif input_string[-1] in ["2"]:
+        ordinal_string = "nd"
+    elif input_string[-1] in ["3"]:
+        ordinal_string = "rd"
+    else:
+        ordinal_string = "th"
+    return ordinal_string
+
+
+def convert_int_to_month_string(input_int, flag_output=["October", "Oct", "Oktober", "Okt"][1]):
+    conversion_dict = {
+        "1" : {
+            "October" : "January",
+            "Oct" : "Jan",
+            "Oktober" : "Januar",
+            "Okt" : "Jan",
+        },
+        "2" : {
+            "October" : "February",
+            "Oct" : "Feb",
+            "Oktober" : "Februar",
+            "Okt" : "Feb",
+        },
+        "3" : {
+            "October" : "March",
+            "Oct" : "Mar",
+            "Oktober" : "März",
+            "Okt" : "Mär",
+        },
+        "4" : {
+            "October" : "April",
+            "Oct" : "Apr",
+            "Oktober" : "April",
+            "Okt" : "Apr",
+        },
+        "5" : {
+            "October" : "May",
+            "Oct" : "May",
+            "Oktober" : "Mai",
+            "Okt" : "Mai",
+        },
+        "6" : {
+            "October" : "June",
+            "Oct" : "Jun",
+            "Oktober" : "Juni",
+            "Okt" : "Jun",
+        },
+        "7" : {
+            "October" : "July",
+            "Oct" : "Jul",
+            "Oktober" : "Juli",
+            "Okt" : "Jul",
+        },
+        "8" : {
+            "October" : "August",
+            "Oct" : "Aug",
+            "Oktober" : "August",
+            "Okt" : "Aug",
+        },
+        "9" : {
+            "October" : "September",
+            "Oct" : "Sep",
+            "Oktober" : "September",
+            "Okt" : "Sep",
+        },
+        "10" : {
+            "October" : "October",
+            "Oct" : "Oct",
+            "Oktober" : "Oktober",
+            "Okt" : "Okt",
+        },
+        "11" : {
+            "October" : "November",
+            "Oct" : "Nov",
+            "Oktober" : "November",
+            "Okt" : "Nov",
+        },
+        "12" : {
+            "October" : "December",
+            "Oct" : "Dec",
+            "Oktober" : "Dezember",
+            "Okt" : "Dez",
+        },
+    }
+    return conversion_dict[str(input_int)][flag_output]
 
 
 # function to generate an output list that can be plotted
@@ -171,14 +278,15 @@ def norm_orth_vec(p1,p2):
 
 
 # This function is used to plot a line from one 2tuple to another.
-def plot_line(start_tuple, end_tuple, linewidth=2, linecolor='black', **kwargs):
-    plt.plot( [start_tuple[0],end_tuple[0]], [start_tuple[1],end_tuple[1]], linewidth=linewidth, color=linecolor, **kwargs)
+def plot_line(start_tuple, end_tuple, linewidth=2, linecolor='black', zorder=5, **kwargs):
+    plt.plot( [start_tuple[0],end_tuple[0]], [start_tuple[1],end_tuple[1]], linewidth=linewidth, color=linecolor, zorder=zorder, **kwargs)
     return
 
 
 # This function is used to connect a list of points with each other utilizing the 'plot_line' function defined above.
 def plot_line_connect_points(
     points_list,
+    input_ax,
     linewidth = 2,
     linestyle = "-",
     linecolor = "black",
@@ -199,9 +307,9 @@ def plot_line_connect_points(
     # plotting the line connecting the dots
     if flag_single_connections == True:
         for i in range(len(x_list)-1):
-            plt.plot( [x_list[i], x_list[i+1]], [y_list[i], y_list[i+1]], linewidth=linewidth, linestyle=linestyle, color=linecolor, zorder=input_zorder)
+            input_ax.plot( [x_list[i], x_list[i+1]], [y_list[i], y_list[i+1]], linewidth=linewidth, linestyle=linestyle, color=linecolor, zorder=input_zorder)
     else:
-        plt.plot( x_list, y_list, linewidth=linewidth, linestyle=linestyle, color=linecolor, zorder=input_zorder)
+        input_ax.plot( x_list, y_list, linewidth=linewidth, linestyle=linestyle, color=linecolor, zorder=input_zorder)
     return
 
 
@@ -271,7 +379,7 @@ def plot_arrow_connect_points(
     tip_right_point = vs(tip_center, scale_vec(n, -0.5*tip_width))
     tip_points = [tip_endpoint, tip_left_point, tip_right_point]
     # plotting
-    plot_line_connect_points(points_list=line_points, linewidth=linewidth, linestyle=linestyle, linecolor=color, flag_connect_last_with_first=False, flag_single_connections=flag_single_connections, input_zorder = input_zorder)
+    plot_line_connect_points(points_list=line_points, input_ax=ax, linewidth=linewidth, linestyle=linestyle, linecolor=color, flag_connect_last_with_first=False, flag_single_connections=flag_single_connections, input_zorder = input_zorder)
     p = patches.Polygon(tip_points, facecolor=color, closed=True, zorder = input_zorder)
     ax.add_patch(p)
     return
@@ -329,8 +437,8 @@ def plot_box_with_multiline_text(
 
 
 # function to draw a number onto a scheme
-def draw_number(ax, r, num="42", radius=2.8, circlecolor='black', textcolor='white', textsize=11, izorder=24, num_offset=(0,0)):
-    circle = patches.Circle(xy=r, radius=radius, facecolor=circlecolor, zorder=izorder, edgecolor='black', linewidth=1.1)
+def draw_circled_number(ax, r, num="42", radius=2.8, circlecolor='black', edgecolor="black", textcolor='white', linewidth=1.1, textsize=11, izorder=24, num_offset=(0,0)):
+    circle = patches.Circle(xy=r, radius=radius, facecolor=circlecolor, zorder=izorder, edgecolor=edgecolor, linewidth=linewidth)
     ax.add_patch(circle)
     plt.text(x=r[0]+num_offset[0], y=r[1]+num_offset[1], s=num, color=textcolor, fontsize=textsize, verticalalignment='center', horizontalalignment='center', zorder=izorder+1)
     return
@@ -371,7 +479,7 @@ def two_tip_arrow(
         flag_single_connections=True,
         input_zorder=30)
     if flag_text != "":
-        plt.text(
+        input_ax.text(
             x = center_point[0]+text_offset[0],
             y = center_point[1]+text_offset[1],
             s = flag_text,
@@ -953,7 +1061,8 @@ def plot_vessel(
         vessel_lw = 3,
         input_linecolor = "black",
         color_vessel_fill = "blue",
-        color_vessel_line = "red"
+        color_vessel_line = "red",
+        input_zorder = 5
     ):
     ### defining important positions
     # pipes
@@ -981,8 +1090,8 @@ def plot_vessel(
         
     ### plotting
     # pipes
-    plot_line(start_tuple=a, end_tuple=c, linewidth=pipes_lw, linecolor=input_linecolor)
-    plot_line(start_tuple=b, end_tuple=d, linewidth=pipes_lw, linecolor=input_linecolor)
+    plot_line(start_tuple=a, end_tuple=c, linewidth=pipes_lw, linecolor=input_linecolor, zorder=input_zorder)
+    plot_line(start_tuple=b, end_tuple=d, linewidth=pipes_lw, linecolor=input_linecolor, zorder=input_zorder)
     # vessel
     if shape == 'rectangle':
 #        plot_line(start_tuple=e, end_tuple=f, linewidth=vessel_lw, linecolor=input_linecolor)
@@ -996,11 +1105,11 @@ def plot_vessel(
 #        plot_line(start_tuple=h, end_tuple=e, linewidth=vessel_lw, linecolor=input_linecolor)
         points_list = [g,f,e,h]
         if orientation == 'above':
-            circle_points = plot_circle(center=z, radius=0.5*vessel_width, phicoverage=(0,1), linewidth=vessel_lw, linecolor=input_linecolor, numberofpoints=1000, izorder=32, flag_plot_circle=False, flag_return_points_list = True)
+            circle_points = plot_circle(center=z, radius=0.5*vessel_width, phicoverage=(0,1), linewidth=vessel_lw, linecolor=input_linecolor, numberofpoints=1000, izorder=input_zorder, flag_plot_circle=False, flag_return_points_list = True)
         if orientation == 'below':
-            circle_points = plot_circle(center=z, radius=0.5*vessel_width, phicoverage=(1,2), linewidth=vessel_lw, linecolor=input_linecolor, numberofpoints=1000, izorder=32, flag_plot_circle=False, flag_return_points_list = True)
+            circle_points = plot_circle(center=z, radius=0.5*vessel_width, phicoverage=(1,2), linewidth=vessel_lw, linecolor=input_linecolor, numberofpoints=1000, izorder=input_zorder, flag_plot_circle=False, flag_return_points_list = True)
         points_list = points_list +circle_points
-    vessel = patches.Polygon(xy=points_list, closed=True, edgecolor=color_vessel_line, facecolor=color_vessel_fill, linewidth=vessel_lw, zorder=32)
+    vessel = patches.Polygon(xy=points_list, closed=True, edgecolor=color_vessel_line, facecolor=color_vessel_fill, linewidth=vessel_lw, zorder=input_zorder)
     ax.add_patch(vessel)
     #elif shape == 'hemisphere_without_vessel':
     #    print("no hemispherical vessel printed")
@@ -1034,10 +1143,13 @@ def plot_gas_bottle(ax, r, diameter, height, cap_width, cap_height, linewidth, i
 
 
 # function to draw a pump symbol onto the MonXe gas system scheme
-def plot_pump(ax, r, radius, linewidth, izorder=24, triangle_offset=(0,0)):
+def plot_pump(ax, r, radius, linewidth, orientation="down", izorder=24, triangle_offset=(0,0)):
     circle = patches.Circle(xy=r, radius=radius, facecolor='white', zorder=izorder, edgecolor='black', linewidth=linewidth)
     ax.add_patch(circle)
-    triangle = patches.Polygon(xy=[[r[0],r[1]-radius], [r[0]-radius,r[1]], [r[0]+radius,r[1]]], closed=True, facecolor='black', zorder=izorder+1)
+    if orientation == "down":
+        triangle = patches.Polygon(xy=[[r[0],r[1]-radius], [r[0]-radius,r[1]], [r[0]+radius,r[1]]], closed=True, facecolor='black', zorder=izorder+1)
+    elif orientation =="right":
+        triangle = patches.Polygon(xy=[[r[0],r[1]-radius], [r[0],r[1]+radius], [r[0]+radius,r[1]]], closed=True, facecolor='black', zorder=izorder+1)
     ax.add_patch(triangle)
     return
 

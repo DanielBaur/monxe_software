@@ -1,5 +1,22 @@
 
+
 # This Python3 library contains code focussing on the analysis of MonXe stuff.
+
+
+
+
+
+# Contents
+
+# Imports
+# Generic Definitions
+# Generic Helper Functions
+# Raw Data
+# Peak Data
+# Activity Data
+# Post Analysis
+
+
 
 
 
@@ -14,6 +31,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import datetime
 import pprint
+import math
 import os
 import random
 from scipy.optimize import curve_fit
@@ -31,7 +49,7 @@ import subprocess
 
 # including the 'monxe_software' libraries 'monxeana' and 'miscfig'
 import sys
-pathstring_miscfig = "/home/daniel/Desktop/arbeitsstuff/20180705__monxe/monxe_software/miscfig/"
+pathstring_miscfig = "/home/daniel/Desktop/arbeitsstuff/monxe/software/miscfig/"
 sys.path.append(pathstring_miscfig)
 import Miscellaneous_Figures as miscfig
 
@@ -49,25 +67,36 @@ username = getpass.getuser()
 
 # paths
 if username == "daniel":
-    abspath_monxe = "/home/daniel/Desktop/arbeitsstuff/20180705__monxe/"
+    abspath_monxe = "/home/daniel/Desktop/arbeitsstuff/monxe/"
 elif username == "monxe":
     abspath_monxe = "/home/monxe/Desktop/"
 else:
     abspath_monxe = "./"
-abspath_measurements = abspath_monxe +"monxe_measurements/"
+abspath_measurements = abspath_monxe +"measurements/"
 relpath_data_compass = "./DAQ/run/RAW/" # this is the folder where CoMPASS stores the measurement data
+abspath_monxe_measurements_external = "/media/daniel/2_intenso_256gb_stick/monxe_measurements/"
+abspath_mastertalk_images = "/home/daniel/Desktop/arbeitsstuff/mastertalk/images/"
+abspath_thesis = "/home/daniel/Desktop/thesis/"
+abspath_thesis_monxe_images =  abspath_thesis +"rec/"
 
 
 # filenames
 filename_data_csv = "DataR_CH0@DT5781A_840_run.csv" # timestamp (and eventually waveform) data
 filename_data_txt = "CH0@DT5781A_840_EspectrumR_run.txt" # adc spectrum data
 filename_histogram_png = "histogram" # histogram plot name
-filename_measurement_data_dict = "measurement_data"
+filename_measurement_data_dict = "measurement_data.json"
 filename_raw_data_ndarray = "raw_data.npy"
 filename_raw_data_png = "raw_data.png"
 filename_peak_data_png = "peak_data.png"
 filename_activity_data_png = "activity_data.png"
+filename_icp_ms_complot = "icp_ms__complot.png"
 
+
+# keys: 'measurement_data'
+key_measurement_information = "measurement_information"
+key_raw_data = "raw_data"
+key_peak_data = "peak_data"
+key_activity_data = "activity_data"
 
 
 # format
@@ -85,6 +114,25 @@ adc_channel_min = 0
 adc_channel_max = 16383
 
 
+### hardware
+# detection vessel
+r_dv_m = 0.077 # detection vessel radius in meters
+h_dv_m = 0.0095 # detection vessel cylinder height in meters
+w_dv_m = 0.022 # detection vessel top flange thickness in meters
+r_dv_cf16_m = 0.016/2 # detection vessel top flange CF16 hole radius in meters (6x)
+r_dv_cf35_m = 0.038/2 # detection vessel top flange CF35 hole radius in meters
+v_hemi = (4/3 *r_dv_m**3 *math.pi *0.5)
+v_cyl = (r_dv_m**2 *math.pi *h_dv_m)
+v_cf16 = 6*(r_dv_cf16_m**2 *math.pi *w_dv_m)
+v_cf35 = 1*(r_dv_cf35_m**2 *math.pi *w_dv_m)
+v_dv_m3 = v_hemi +v_cyl +v_cf16 +v_cf35 # detection vessel volume in cubic meters, cylinder +hemisphere +6*CF16 +1*CF35
+# emanation vessel
+r_ev_m = 0.254/2 # emanation vessel radius in meters
+l_ev_m = 0.400 # emanation vessel tube length in meters
+w_ev_m = 0.026 # emanation vessel top flange thickness in meters
+r_ev_cf16_m = 0.0175/2 # emanation vessel top flange CF16 hole radius in meters (3x)
+r_ev_cf35_m = 0.0385/2 # emanation vessel top flange CF35 hole radius in meters (4x)
+v_ev_m3 = (r_ev_m**2 *math.pi *l_ev_m) +3*(r_ev_cf16_m**2 *math.pi *w_ev_m) +4*(r_ev_cf35_m**2 *math.pi *w_ev_m)
 
 
 # isotope data
@@ -175,6 +223,12 @@ isotope_dict = {
 }
 
 
+color_dict_ev = {
+    "ev_cf250pp_1" : "yellow",
+    "ev_cf35fn_1" : "orange",
+}
+
+
 # half lives
 t_half_222rn = 3.8232 *24 *60 *60 # 3.8232 d
 t_half_218po = 3.071 *60 # 3.071 min 
@@ -196,7 +250,7 @@ activity_interval_h = 3
 
 
 #######################################
-### Generic Functions
+### Generic Helper Functions
 #######################################
 
 
@@ -225,6 +279,98 @@ def convert_string_to_datetime_object(datetime_str):
 #convert_string_to_datetime_object(datetime_str="20200731_1530")
 
 
+# This function is used to convert a timestamp (or an iterable of timestamps) from one format to another.
+# exemplary use:
+#     i = [np.datetime64('today'), "20210531_1200", datetime.datetime.now()][0]
+#     i = [[np.datetime64('today'),np.datetime64('today')], ["20210531_1200", "20210531_1200"], [datetime.datetime.now(),datetime.datetime.now()]][0]
+#     print(f"i: {i}, type of i: {type(i)}")
+#     f = timestamp_conversion(i, "str")
+#     print(f"f: {f}, type of f: {type(f)}")
+def timestamp_conversion(
+    input_timestamp,
+    flag_output_type = [
+        "string", "str",
+        "np.datetime64", "np.dt64",
+        "datetime.datetime", "dt.dt"][4],
+    flag_input_timestamp_string_format = "%Y%m%d_%H%M",
+    flag_output_timestamp_string_format = "%Y%m%d_%H%M",):
+    # figuring out the input data type whether it's an iterable or not
+    if not hasattr(input_timestamp, "__len__") or type(input_timestamp)==str:
+        input_data_type = type(input_timestamp)
+        timestamp_i_list = [input_timestamp]
+    else:
+        input_data_type = type(input_timestamp[0])
+        timestamp_i_list = input_timestamp
+    # timestamp_i: conversion of input to a list of 'datetime.datetime' elements
+    if input_data_type == str:
+        timestamp_i_list = [datetime.datetime.strptime(timestamp_i, flag_input_timestamp_string_format) for timestamp_i in timestamp_i_list]
+    elif input_data_type == datetime.datetime:
+        timestamp_i_list = [timestamp_i for timestamp_i in timestamp_i_list]
+    elif input_data_type == np.datetime64:
+        timestamp_i_list = [timestamp_i.astype(datetime.datetime) for timestamp_i in timestamp_i_list]
+    else:
+        raise Exception(f"'timestamp_conversion()': unknown input timestamp format '{input_data_type}'")
+    # timestamp_f: conversion of 'timestamp_i' to 'flag_output_type'
+    if flag_output_type in ["string", "str"]:
+        timestamp_f_list = [timestamp_i.strftime(flag_output_timestamp_string_format) for timestamp_i in timestamp_i_list]
+    elif flag_output_type in ["np.datetime64", "np.dt64"]:
+        timestamp_f_list = [np.array([timestamp_i]).astype(np.datetime64)[0] for timestamp_i in timestamp_i_list]
+    elif flag_output_type in ["datetime.datetime", "dt.dt"]:
+        timestamp_f_list = [timestamp_i for timestamp_i in timestamp_i_list]
+    else:
+        raise Exception(f"'timestamp_conversion()': unknown output timestamp format '{flag_output_type}'")
+    # returning the output timestamp (list)
+    if not hasattr(input_timestamp, "__len__") or type(input_timestamp)==str:
+        return timestamp_f_list[0]
+    else:
+        return timestamp_f_list
+
+
+# This function is used to calculate the mean and error of combined measurements of the same physical quantity for a list of measured values and corresponding errors according to Gaussian error propagation.
+def calc_weighted_mean_with_error(
+    measurements,
+    errors):
+    weighted_mean = np.sum([measurements[i]/errors[i]**2 for i in range(len(measurements))]) / np.sum([err**(-2) for err in errors])
+    error = np.sqrt(1/(np.sum([err**(-2) for err in errors])))
+    return [weighted_mean, error]
+
+
+# This function is used to calculate the ratio of following Gaussian error propagation.
+def calc_ratio_with_error(numerator, denominator, err_num, err_denom):
+    ratio_mean = numerator/denominator
+    ratio_error = np.sqrt(((1/denominator)*err_num)**2 +((numerator/denominator**2)*err_denom)**2)
+    return [ratio_mean, ratio_error]
+
+
+# This function is used to extrapolate the exponential decay/rise in radon activity.
+# asymptotic exponential rise: a(t) = a_ema *(1-exp(-lambda_222rn*dt))
+# exponential decay: a(t) = a_t_0 *exp(-lambda_222rn*dt)
+# NOTE: 'time delta' (dt) refers to the time since t_0
+def extrapolate_radon_activity(
+    dt_extrapolation_s, # time delta at which the function chosen below is extrapolated
+    known_activity_at_dt_known_bq, # known activity (in Becquerel) at ...
+    known_dt_s, # ... known time delta (in seconds)
+    known_activity_error_at_dt_known_bq = 0, # error of known activity at known time
+    flag_exp_rise_or_decay = ["rise", "decay"][0], # flag determining wheter to extrapolate exponential rise or decay
+    lambda_222rn = isotope_dict["rn222"]["decay_constant"]): # 222rn decay constant
+    # exponential decay
+    if flag_exp_rise_or_decay == "decay":
+        a_t_0 = known_activity_at_dt_known_bq *np.exp(lambda_222rn *known_activity_at_dt_known_bq)
+        a_t_1 = a_t_0 *np.exp(-lambda_222rn *dt_extrapolation_s)
+        a_t_1_error = np.exp(lambda_222rn*known_dt_s) *np.exp(-lambda_222rn*dt_extrapolation_s) *known_activity_error_at_dt_known_bq
+        return a_t_1, a_t_1_error
+    # asymptotic exponential rise
+    elif flag_exp_rise_or_decay == "rise":
+        a_ema = known_activity_at_dt_known_bq/(1-np.exp(-lambda_222rn *known_dt_s))
+        a_ema_error = (1/(1-np.exp(-lambda_222rn*known_dt_s))) *known_activity_error_at_dt_known_bq
+        if dt_extrapolation_s == "inf":
+            return a_ema, a_ema_error
+        else:
+            a_t1 = a_ema *(1-np.exp(-lambda_222rn *dt_extrapolation_s))
+            a_t1_error = a_ema_error *(1-np.exp(-lambda_222rn *dt_extrapolation_s))
+            return a_t1, a_t1_error
+
+
 # This function is used to retrieve a Python3 dictionary stored as a .json file.
 def get_dict_from_json(input_pathstring_json_file):
     with open(input_pathstring_json_file, "r") as json_input_file:
@@ -241,14 +387,18 @@ def write_dict_to_json(output_pathstring_json_file, save_dict):
 
 # This function is used to update and save the 'measurement_data' dictionary.
 def update_and_save_measurement_data(
-    measurement_data_dict,
-    update_dict,
-    measurement_data_output_pathstring
-):
+    abspath_measurement_data_dict,
+    update_dict):
+
+    # retrieving the 'measurement_data' dictionary
+    try:
+        measurement_data_dict = get_dict_from_json(input_pathstring_json_file=abspath_measurement_data_dict)
+    except:
+        measurement_data_dict = {}
 
     # updating and saving the 'measurement_data' dict
     measurement_data_dict.update(update_dict)
-    write_dict_to_json(measurement_data_output_pathstring,measurement_data_dict)
+    write_dict_to_json(abspath_measurement_data_dict,measurement_data_dict)
     
     # printing the 'update_dict' data
     print(f"'update_and_save_measurement_data()':")
@@ -311,7 +461,8 @@ def get_raw_data_from_list_file(
     pathstring_output, # pathstring according to which the extracted data should be saved as a ndarray
     flag_ctr = 10**10, # counter determining the number of processed events
     flag_daq = ["mc2analyzer", "compass_auto", "compass_custom"][1], # flag indicating the method of data extraction
-    flag_debug = ["no_debugging", "debug", "debug_storewfms"][1]): # flag indicating the debugging method
+    flag_debug = ["no_debugging", "debug", "debug_storewfms"][1],
+    input_filename_blacklist = []): # flag indicating the debugging method
 
     # automatically retrieving the data if split into multiple files
     t_i = datetime.datetime.now()
@@ -331,13 +482,17 @@ def get_raw_data_from_list_file(
     # looping over the list files and writing the data into 'timestamp_tuple_list'
     print(f"get_raw_data_from_list_file(): starting data retrieval")
     timestamp_data_tuplelist = [] # this list will later be cast into a structured array
-    ctr = 0 # counter tracking the number of processed waveforms
+    ctr = 0 # counter tracking the number of processed entries
     if flag_debug == "debug_storewfms":
         subprocess.call("rm -r " +relpath_rawdatadebugging +"*", shell=True)
-    for pathstring_measurement_data in measurement_files_pathstrings:
+    #for pathstring_measurement_data in [pathstring if all([True if blacklistentry not in pathstring else False for blacklistentry in input_filename_blacklist]) for pathstring in measurement_files_pathstrings]:
+    #for pathstring_measurement_data in measurement_files_pathstrings:
+    for pathstring_measurement_data in [pathstring for pathstring in measurement_files_pathstrings if all([True if blacklistentry not in pathstring else False for blacklistentry in input_filename_blacklist])]:
+        truelist = [True if blacklistentry not in pathstring_measurement_data else False for blacklistentry in input_filename_blacklist]
         with open(pathstring_measurement_data) as input_file:
 
             # retrieving raw data from CoMPASS list file
+            print(f"\tfile: {pathstring_measurement_data.split('/')[-1]} h")
             if flag_daq in ["compass_auto", "compass_custom"]:
                 for line in input_file:
                     if line.startswith("BOA"):
@@ -497,14 +652,14 @@ def print_misc_meas_information(meas_ndarray):
     print(f"\trecorded events: {len(meas_ndarray)}")
 
     # event groups
-    print(f"\t\tthereof in ch0: {len(meas_ndarray[(meas_ndarray['pulse_height_adc'] == 0)])}")
-    print(f"\t\tthereof within the first 50 adc channels: {len(meas_ndarray[(meas_ndarray['pulse_height_adc']<50)])}")
-    print(f"\t\tthereof in negative: {len(meas_ndarray[(meas_ndarray['pulse_height_adc'] < 0)])}")
-    print(f"\t\tthereof above max adc channel ({adc_channel_max}): {len(meas_ndarray[(meas_ndarray['pulse_height_adc'] > adc_channel_max)])}")
+    print(f"\t\tthereof in ch0: {len(meas_ndarray[(meas_ndarray['pulse_height_adc'] == 0)])} ({len(meas_ndarray[(meas_ndarray['pulse_height_adc'] == 0)])/len(meas_ndarray)*100:.2f} %)")
+    print(f"\t\tthereof within the first 50 adc channels: {len(meas_ndarray[(meas_ndarray['pulse_height_adc']<50)])} ({len(meas_ndarray[(meas_ndarray['pulse_height_adc']<50)])/len(meas_ndarray)*100:.2f} %)")
+    print(f"\t\tthereof in negative: {len(meas_ndarray[(meas_ndarray['pulse_height_adc'] < 0)])} ({len(meas_ndarray[(meas_ndarray['pulse_height_adc'] < 0)])/len(meas_ndarray)*100:.2f} %)")
+    print(f"\t\tthereof above max adc channel ({adc_channel_max}): {len(meas_ndarray[(meas_ndarray['pulse_height_adc'] > adc_channel_max)])} ({len(meas_ndarray[(meas_ndarray['pulse_height_adc'] > adc_channel_max)])/len(meas_ndarray)*100:.2f} %)")
     # fit (only for CoMPASS DAQ)
     if "flag_daq" in meas_ndarray.dtype.names:
-        print(f"\t\tthereof correctly fitted: {len(meas_ndarray[(meas_ndarray['flag_pha'] == 'fit_successful')])}")
-        print(f"\t\tthereof not fitted: {len(meas_ndarray[(meas_ndarray['flag_pha'] == 'fit_failed')])}")
+        print(f"\t\tthereof correctly fitted: {len(meas_ndarray[(meas_ndarray['flag_pha'] == 'fit_successful')])} ({len(meas_ndarray[(meas_ndarray['flag_pha'] == 'fit_successful')])/len(meas_ndarray)*100:.2f} %)")
+        print(f"\t\tthereof not fitted: {len(meas_ndarray[(meas_ndarray['flag_pha'] == 'fit_failed')])} ({len(meas_ndarray[(meas_ndarray['flag_pha'] == 'fit_failed')])/len(meas_ndarray)*100:.2f} %)")
     # mca flags
     mca_flag_list = []
     for i in range(len(meas_ndarray)):
@@ -521,7 +676,18 @@ def print_misc_meas_information(meas_ndarray):
 
 
 # This function is used to 
-def get_raw_data_dict(raw_data):
+def get_raw_data_dict(abspath_raw_data):
+
+    # generating and saving the raw data ndarry ('raw_data.npy')
+    measurement_directory = os.path.split(os.path.join(os.getcwd()))[1]
+    try: # reading mca list file(s) from attached external drive ...
+        raw_data = get_raw_data_from_list_file(
+            pathstring_input_data = abspath_monxe_measurements_external +measurement_directory +"/" +relpath_data_compass +filename_data_csv,
+            pathstring_output = abspath_raw_data,
+            flag_daq = ["mc2analyzer", "compass_auto", "compass_custom"][1],
+            flag_debug = ["no_debugging", "debug", "debug_storewfms"][0])
+    except: # ... or loading ndarray if drive not attached but already saved locally
+        raw_data = np.load(abspath_raw_data)
 
     # initializing the 'misc_meas_information_dict'
     raw_data_dict = {
@@ -1460,6 +1626,9 @@ def get_activity_data_dict(
         "p_opt_guess" : [0,0,0,0,0.02], # 
         "flag_errors" : ["poissonian"][0]
     },
+    activity_extrapolation_settings_dict = {
+        "flag_activity_extrapolation" : [False, "default"][1],
+    },
 ):
 
     # analysis preparation
@@ -1562,7 +1731,42 @@ def get_activity_data_dict(
         po214_n214bi0_error = p_err[3]
         po214_r_error = p_err[4]
 
-    # returning the 'activity_data_dict'
+    # extrapolating the equilibrium emanation activity
+    if activity_extrapolation_settings_dict["flag_activity_extrapolation"] == False:
+        dt_trans = "NA"
+        dt_ema = "NA"
+        a_ema = "NA"
+        a_ema_error ="NA" 
+    elif activity_extrapolation_settings_dict["flag_activity_extrapolation"] in ["default"]:
+        # retrieving the relevant times from the ELOG timestamps
+        t_ema_i = measurement_data_dict[key_measurement_information]["t_ema_i"]
+        t_trans_i = measurement_data_dict[key_measurement_information]["t_trans_i"]
+        t_meas_i = measurement_data_dict[key_measurement_information]["t_meas_i"]
+        # calculating the relevant time deltas
+        #dt_meas = (timestamp_conversion(t_meas_f)-timestamp_conversion(t_meas_i)).total_seconds()
+        dt_ema = (timestamp_conversion(t_trans_i)-timestamp_conversion(t_ema_i)).total_seconds()
+        dt_trans = (timestamp_conversion(t_meas_i)-timestamp_conversion(t_trans_i)).total_seconds()
+        # calculating the activities
+        a_t_meas_i = po214_n222rn0 *isotope_dict["rn222"]["decay_constant"]
+        a_t_meas_i_error = po214_n222rn0_error *isotope_dict["rn222"]["decay_constant"]
+        # extrapolating from 't_meas_i' to 't_trans_i'
+        a_t_trans_i, a_t_trans_i_error = extrapolate_radon_activity(
+            dt_extrapolation_s = 0,
+            known_activity_at_dt_known_bq = a_t_meas_i,
+            known_dt_s = dt_trans,
+            known_activity_error_at_dt_known_bq = a_t_meas_i_error,
+            flag_exp_rise_or_decay = ["rise", "decay"][1],
+            lambda_222rn = isotope_dict["rn222"]["decay_constant"])
+        # extrapolating from 't_trans_i' to 'inf'
+        a_ema, a_ema_error = extrapolate_radon_activity(
+            dt_extrapolation_s = "inf",
+            known_activity_at_dt_known_bq = a_t_trans_i,
+            known_dt_s = dt_ema,
+            known_activity_error_at_dt_known_bq = a_t_trans_i_error,
+            flag_exp_rise_or_decay = ["rise", "decay"][0],
+            lambda_222rn = isotope_dict["rn222"]["decay_constant"])
+
+    # writing and returning the 'activity_data_dict'
     activity_data_dict = {
         "decay_model_fit_settings" : decay_model_fit_settings_dict,
         "decay_model_fit_results" : {
@@ -1601,7 +1805,13 @@ def get_activity_data_dict(
                 "r_error" : po214_r_error
             }
         },
-        "activity_extrapolation" : {}
+        "activity_extrapolation_settings" : activity_extrapolation_settings_dict,
+        "activity_extrapolation" : {
+            "dt_trans_s" : dt_trans,
+            "dt_ema_s" : dt_ema,
+            "a_ema_bq" : a_ema,
+            "a_ema_error_bq" :  a_ema_error,
+        }
     }
     return activity_data_dict
 
@@ -1778,15 +1988,16 @@ def plot_activity_data(
             zorder = 30)
 
     # marking as 'preliminary'
-    plt.text(
-        x = 0.97,
-        y = 0.95,
-        transform = ax1.transAxes,
-        s = "preliminary",
-        color = "red",
-        fontsize = 13,
-        verticalalignment = 'center',
-        horizontalalignment = 'right')
+    if plot_settings_dict["flag_preliminary"] == True:
+        plt.text(
+            x = 0.97,
+            y = 0.95,
+            transform = ax1.transAxes,
+            s = "preliminary",
+            color = "red",
+            fontsize = 13,
+            verticalalignment = 'center',
+            horizontalalignment = 'right')
 
     # saving the output plot
     plt.legend(**plot_settings_dict["legend_kwargs"])
@@ -1798,4 +2009,44 @@ def plot_activity_data(
     return fig, ax1
 
 
+
+
+
+#######################################
+### Post Analysis
+#######################################
+
+
+# This function is used to retrieve measurement data, i.e., output .json files, inquired by the 'input_measurement_id_list'.
+def get_measurement_data_for_id_list(input_measurement_id_list):
+
+    # initializing
+    print(f"get_measurement_data_for_id_list({input_measurement_id_list}):")
+    measurement_dict = {}
+    measurement_folder_list = [filename for filename in os.listdir(abspath_measurements) if os.path.isdir(abspath_measurements +filename)]
+    for measurement_id in input_measurement_id_list:
+        relpath_measurement_folder_list = [directory_name for directory_name in measurement_folder_list if "__" +measurement_id +"__" in directory_name]
+
+        # writing the acquired data to the 'measurement_dict'
+        if len(relpath_measurement_folder_list) == 1:
+            relpath_measurement_folder = "./" +relpath_measurement_folder_list[0] +"/"
+            measurement_dict.update({
+                list(relpath_measurement_folder_list[0].split("__"))[1] : {
+                    "timestamp" : list(relpath_measurement_folder_list[0].split("__"))[0],
+                    "name" : list(relpath_measurement_folder_list[0].split("__"))[2],
+                    "data" : get_dict_from_json(abspath_measurements +relpath_measurement_folder +filename_measurement_data_dict)}
+                })
+            print(f"\tretrieved '{relpath_measurement_folder +filename_measurement_data_dict +'.json'}'")
+        else:
+            print(f"\tERROR: Could not find data corresponding to measurement id '{measurement_id}' (candidate directories: {relpath_measurement_folder_list}).")
+
+    # printing the data retrieval result
+    diff_list = [measurement_id for measurement_id in input_measurement_id_list if measurement_id not in [*measurement_dict]]
+    if len(diff_list) != 0:
+        raise Exception(f"\tERROR Could not retrieve the requested data for the following measurement ids: {diff_list}.")
+    else:
+        print(f"\tSuccessfully retrieved the requested data.")
+                  
+    # returning the 'measurement_dict' filled with the requested data.
+    return measurement_dict
 
