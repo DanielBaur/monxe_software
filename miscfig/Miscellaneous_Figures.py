@@ -277,6 +277,52 @@ def norm_orth_vec(p1,p2):
     return nov
 
 
+# This function is used to annotate a label onto a plot that is sitting in between two arrows.
+def draw_label_at_foot_of_arrows(
+    text_r,
+    text_label,
+    text_fontsize,
+    text_color,
+    arrow_tips,
+    arrow_gap,
+    arrow_linewidth,
+    arrow_linecolor,
+    arrow_tipwidth,
+    arrow_tiplength,
+    zorder,
+    ax):
+    # inferring the arrow feet
+    arrow_feet = []
+    for arrow_tip in arrow_tips:
+        arrow_foot = list(vs(arrow_tip, [-text_r[0],-text_r[1]]))
+        arrow_foot = list(norm_vec(arrow_foot))
+        arrow_foot = list(scale_vec(arrow_foot, arrow_gap))
+        arrow_foot = list(vs(text_r, arrow_foot))
+        arrow_feet.append(arrow_foot)
+    # drawing the arrows
+    for arrow_coordinates in zip(arrow_feet, arrow_tips):
+        plot_arrow_connect_points(
+            ax = ax,
+            points_list = list(arrow_coordinates),
+            linewidth = arrow_linewidth,
+            color = arrow_linecolor,
+            tip_width = arrow_tipwidth,
+            tip_length = arrow_tiplength,
+            linestyle = "-",
+            flag_single_connections = True,
+            input_zorder = zorder)
+    # annotating the label
+    ax.text(
+        s = text_label,
+        x = text_r[0],
+        y = text_r[1],
+        fontsize = text_fontsize,
+        color = text_color,
+        horizontalalignment = "center",
+        verticalalignment = "center")
+    return
+
+
 # This function is used to plot a line from one 2tuple to another.
 def plot_line(start_tuple, end_tuple, linewidth=2, linecolor='black', zorder=5, **kwargs):
     plt.plot( [start_tuple[0],end_tuple[0]], [start_tuple[1],end_tuple[1]], linewidth=linewidth, color=linecolor, zorder=zorder, **kwargs)
@@ -1164,6 +1210,100 @@ data_dtype = np.dtype([
     ("N5", np.float32),
 ])
 
+
+
+
+
+#######################################
+### Electronic Schematics
+#######################################
+
+
+# This function is used to draw a GND symbol onto a plot
+def draw_gnd_symbol(
+    ax,
+    anchor,
+    width,
+    depth,
+    linewidth,
+    color = "black",
+    zorder = 1):
+    bc = vs(anchor, [0,-depth])
+    bl = vs(bc, [-0.5*(2/6)*width, 0])
+    br = vs(bc, [0.5*(2/6)*width, 0])
+    cc = vs(anchor, [0, -0.5*depth])
+    cl = vs(cc, [-0.5*(4/6)*width, 0])
+    cr = vs(cc, [0.5*(4/6)*width, 0])
+    tl = vs(anchor, [-0.5*(6/6)*width, 0])
+    tr = vs(anchor, [0.5*(6/6)*width, 0])
+    for line in [[bl, br], [cl, cr], [tl, tr]]:
+        ax.plot(
+            [line[0][0], line[1][0]],
+            [line[0][1], line[1][1]],
+            linewidth = linewidth,
+            color = color,
+            zorder = zorder)
+
+
+# This function is used to draw a resistor symbol onto a plot
+def draw_resistor(
+    ax,
+    position,
+    width,
+    height,
+    linewidth = 1,
+    rotation = 0,
+    linecolor = "black",
+    fillcolor = "white",
+    zorder = 1):
+    resistor_box = patches.Rectangle(
+        xy = vs(position, [-0.5*width, -0.5*height]),
+        width = width,
+        height = height,
+        angle = rotation,
+        linewidth = linewidth,
+        edgecolor = linecolor,
+        facecolor = fillcolor,
+        zorder = zorder)
+    ax.add_patch(resistor_box)
+    return
+
+
+# This function is used to draw a resistor symbol onto a plot
+def draw_capacitor(
+    ax,
+    position,
+    width,
+    height,
+    linewidth = 1,
+    rotation = 0,
+    linecolor = "black",
+    fillcolor = "white",
+    zorder = 1):
+    # filling the dielectric
+    dielectric_box = patches.Rectangle(
+        xy = vs(position, [-0.5*width, -0.5*height]),
+        width = width,
+        height = height,
+        angle = rotation,
+        linewidth = 0,
+        edgecolor = fillcolor,
+        facecolor = fillcolor,
+        zorder = zorder)
+    ax.add_patch(dielectric_box)
+    # drawing the capacitor plates
+    top_left = vs(position, [-0.5*width, +0.5*height])
+    bottom_left = vs(position, [-0.5*width, -0.5*height])
+    top_right = vs(position, [+0.5*width, +0.5*height])
+    bottom_right = vs(position, [+0.5*width, -0.5*height])
+    for plate in [[top_left, bottom_left], [top_right, bottom_right]]:
+        ax.plot(
+            [plate[0][0], plate[1][0]],
+            [plate[0][1], plate[1][1]],
+            color = linecolor,
+            linewidth = linewidth,
+            zorder = zorder)
+    return
 
 
 

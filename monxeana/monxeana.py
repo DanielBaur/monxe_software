@@ -33,6 +33,7 @@ import datetime
 import pprint
 import math
 import os
+import re
 import random
 from scipy.optimize import curve_fit
 from matplotlib.ticker import AutoMinorLocator
@@ -82,6 +83,7 @@ abspath_thesis_monxe_images =  abspath_thesis +"rec/"
 
 # filenames
 filename_data_csv = "DataR_CH0@DT5781A_840_run.csv" # timestamp (and eventually waveform) data
+filename_data_csv_gemse = "DataR_CH0@DT5781A_793_run.csv" # timestamp (and eventually waveform) data
 filename_data_txt = "CH0@DT5781A_840_EspectrumR_run.txt" # adc spectrum data
 filename_histogram_png = "histogram" # histogram plot name
 filename_measurement_data_dict = "measurement_data.json"
@@ -95,7 +97,7 @@ filename_icp_ms_complot = "icp_ms__complot.png"
 # keys: 'measurement_data'
 key_measurement_information = "measurement_information"
 key_raw_data = "raw_data"
-key_peak_data = "peak_data"
+key_spectrum_data = "spectrum_data"
 key_activity_data = "activity_data"
 
 
@@ -342,6 +344,14 @@ def calc_ratio_with_error(numerator, denominator, err_num, err_denom):
     return [ratio_mean, ratio_error]
 
 
+# one possible energy-channel relation: linear
+def function_linear_vec(x, m, t):
+    if hasattr(x, "__len__"):
+        return [m*xi +t for xi in x]
+    else:
+        return m*x +t
+
+
 # This function is used to extrapolate the exponential decay/rise in radon activity.
 # asymptotic exponential rise: a(t) = a_ema *(1-exp(-lambda_222rn*dt))
 # exponential decay: a(t) = a_t_0 *exp(-lambda_222rn*dt)
@@ -401,7 +411,7 @@ def update_and_save_measurement_data(
     write_dict_to_json(abspath_measurement_data_dict,measurement_data_dict)
     
     # printing the 'update_dict' data
-    print(f"'update_and_save_measurement_data()':")
+    print(f"update_and_save_measurement_data(): added the following dictionary to 'measurement_data.json'\n")
     print(json.dumps(update_dict, indent=4, sort_keys=True))
     
     # returning None
@@ -415,12 +425,17 @@ def update_and_save_measurement_data(
 #######################################
 
 
-# This is the dtype used for raw data extracted from CoMPASS.
-raw_data_dtype = np.dtype([
+# This is the dtype list used to generate the MCA raw data ndarray
+raw_data_dtype_list = [
     ("timestamp_ps", np.uint64), # timestamp in ps
     ("pulse_height_adc", np.int16), # max adc channel is ~16000, np.int16 ranges from -32768 to 32767
     ("flag_mca", np.unicode_, 16), # flag extracted from the mca list file
-])
+#    ("wfm_data", np.int16, n), # added if 'flag_get_wfm_data' is set to True in 'get_raw_data_from_mca_list_file()'
+]
+
+
+# This is the dtype used for the MCA raw data ndarray
+raw_data_dtype = np.dtype(raw_data_dtype_list)
 
 
 # This is the dtype used for raw data extracted from CoMPASS.
@@ -455,260 +470,140 @@ def fitfunction__independent_exponential_rise_and_fall__vec(x, y_baseline, x_ris
     return y
 
 
-# This function is used to load the raw data from the MCA list file generated either by MC2Analyzer or CoMPASS.
-def get_raw_data_from_list_file(
-    pathstring_input_data, # pathstring at which the MCA list file can be found
-    pathstring_output, # pathstring according to which the extracted data should be saved as a ndarray
-    flag_ctr = 10**10, # counter determining the number of processed events
-    flag_daq = ["mc2analyzer", "compass_auto", "compass_custom"][1], # flag indicating the method of data extraction
-    flag_debug = ["no_debugging", "debug", "debug_storewfms"][1],
-    input_filename_blacklist = []): # flag indicating the debugging method
+def get_raw_data_ndarray_from_mca_list_file(
+    abspath_list_file, # abspath of the input MCA list file
+    flag_abspath_output_ndarray = [], # list of abspaths at which the retrieved raw data ndarray should be saved
+    flag_ctr = 10**10, # flag indicating the number of processed events
+    flag_multiple_list_files = [False, True][0], # flag indicating whether data is retrieved from only one or many files matching the 'abspath_list_file' input string
+    flag_get_waveform_data = [False, True][0], # flag indicating whether waveform data should be extracted as well, can be False, True, or a list with the abspath of the output and relevant time stamps ["/home/daniel/Desktop/wfm_data.npy", [178978375, 2485789275]]
+    flag_ignored_list_files = []): # flag indicating the ignored files
+    
+    """
+    This function is used to load the raw data from the MCA list file generated either by CoMPASS or MC2Analyzer.
+    """
 
-    # automatically retrieving the data if split into multiple files
+    ### initialization
     t_i = datetime.datetime.now()
-    print(f"get_raw_data_from_list_file(): searching for\n '{pathstring_input_data}'\n")
-    if flag_daq in ["compass_auto", "compass_custom"]:
-        path_searchfolder = "/".join(pathstring_input_data.split("/")[:-1]) +"/" # this is the directory of the input list file
-        measurement_files_pathstrings = [path_searchfolder +filename for filename in os.listdir(path_searchfolder) if filename_data_csv[:-4] in filename]
-    elif flag_daq == "mc2analyzer":
-        measurement_files_pathstrings = [pathstring_input_data]
-    else:     # catching undefined 'flag_daq' values
-        raise Exception(f"get_raw_data_from_list_file(): wrong input 'flag_daq': {flag_daq}")
-    print(f"get_raw_data_from_list_file(): found the following {len(measurement_files_pathstrings)} raw data files:")
-    for i in range(len(measurement_files_pathstrings)):
-        print("\t - " +measurement_files_pathstrings[i].split("/")[-1])
+    thisfunctionname = "get_raw_data_from_mca_list_file"
+
+    ### retrieving the abspaths of the desired MCA list files
+    print(f"{thisfunctionname}(): searching for\n '{abspath_list_file}'\n")
+    # retrieving information from the 'abspath_list_file' input
+    abspath_list_files_directory = "/".join(abspath_list_file.split("/")[:-1]) +"/"
+    filename_list_file = abspath_list_file.split("/")[-1]
+    abspath_list_files_list = [abspath_list_file]
+    flag_daq = "CoMPASS" if filename_list_file.endswith(".csv") else "MC2"
+    flag_daq_extension = ".csv" if filename_list_file.endswith(".csv") else ".txt"
+    # searching for multiple files according to the 'flag_multiple_list_files' input
+    if type(flag_multiple_list_files) == list:
+        abspath_list_files_list = abspath_list_files_list +flag_multiple_list_files
+    elif flag_multiple_list_files == True:
+        candidate_filename_list = os.listdir(abspath_list_files_directory)
+        for filename in candidate_filename_list:
+            if os.path.isfile(abspath_list_files_directory +filename):
+                if filename.endswith(flag_daq_extension):
+                    if filename != filename_list_file:
+                        filename_composition_list = re.split("\W+|_", filename) # https://stackoverflow.com/questions/1059559/split-strings-into-words-with-multiple-word-boundary-delimiters (accessed: 28th October 2021)
+                        n_possible_matches = len(filename_composition_list)
+                        n_unmatches = 3
+                        n_matches = len([True for part in filename_composition_list if part in filename_list_file])
+                        if n_matches >= n_possible_matches -n_unmatches:
+                            abspath_list_files_list.append(abspath_list_files_directory +filename)
+            else:
+                pass
+    elif flag_multiple_list_files == False:
+        pass
+    else:
+        raise Exception("\tthe 'flag_multiple_list_files' input must be in [False, True, ['abspath/to/another/list_file']]")
+    # printing the outcome of the file search
+    print(f"{thisfunctionname}(): found the following {len(abspath_list_files_list)} MCA list files recorded with {flag_daq}:")
+    for abspath in abspath_list_files_list:
+        print(f"\t - {abspath.split('/')[-1]}")
     print("")
 
-    # looping over the list files and writing the data into 'timestamp_tuple_list'
-    print(f"get_raw_data_from_list_file(): starting data retrieval")
+    ### looping over the list files and writing the data into 'timestamp_tuple_list'
+    print(f"{thisfunctionname}(): starting data retrieval")
     timestamp_data_tuplelist = [] # this list will later be cast into a structured array
     ctr = 0 # counter tracking the number of processed entries
-    if flag_debug == "debug_storewfms":
-        subprocess.call("rm -r " +relpath_rawdatadebugging +"*", shell=True)
-    #for pathstring_measurement_data in [pathstring if all([True if blacklistentry not in pathstring else False for blacklistentry in input_filename_blacklist]) for pathstring in measurement_files_pathstrings]:
-    #for pathstring_measurement_data in measurement_files_pathstrings:
-    for pathstring_measurement_data in [pathstring for pathstring in measurement_files_pathstrings if all([True if blacklistentry not in pathstring else False for blacklistentry in input_filename_blacklist])]:
-        truelist = [True if blacklistentry not in pathstring_measurement_data else False for blacklistentry in input_filename_blacklist]
-        with open(pathstring_measurement_data) as input_file:
-
-            # retrieving raw data from CoMPASS list file
-            print(f"\tfile: {pathstring_measurement_data.split('/')[-1]} h")
-            if flag_daq in ["compass_auto", "compass_custom"]:
-                for line in input_file:
+    for abspath_list_file in [pathstring for pathstring in abspath_list_files_list if all([True if ignored_filename not in pathstring else False for ignored_filename in flag_ignored_list_files])]:
+        #truelist = [True if blacklistentry not in abspath_list_file else False for blacklistentry in input_filename_blacklist]
+        with open(abspath_list_file) as input_file:
+            print(f"\t - {abspath_list_file.split('/')[-1]}")
+            for line in input_file:
+                # CoMPASS
+                if flag_daq in ["CoMPASS"]:
                     if line.startswith("BOA"):
                         continue
                     elif ctr <= flag_ctr:
-                    #elif not line.startswith("BOA"):
                         line_list = list(line.split(";"))
                         board = np.uint64(line_list[0]) # irrelevant
                         channel = np.uint64(line_list[1]) # irrelevant
                         timestamp_ps = np.uint64(line_list[2]) # timestamp in picoseconds
                         pulse_height_adc = np.uint64(line_list[3]) # pulse height in adc determined via trapezoidal filter
                         flag_mca = line_list[4] # information flag provided by CoMPASS
-                        wfm_data_ndarray = np.array([(int(i)) for i in line_list[5:]], np.dtype([("wfm_data_adc", np.int16)])) # waveform data in adc channels
-                        t_ns = [i for i in range(len(wfm_data_ndarray["wfm_data_adc"]))] # sampling times in 10ns (corresponding to MCA sampling rate of 100MS/s)
-                        timestamp_data_tuple = (timestamp_ps, pulse_height_adc, flag_mca) # exported data corresponding to 'raw_data_dtype'
-
-                        # determining the energy with a custom PHA instead of utilizing the CoMPASS trapezoidal filter algorithm
-                        if flag_daq == "compass_custom":
-                            try:
-                                p0_i = [ # this initial guess is empirically tuned to amp_v5.1a and amp_v5.1b utilizing CoMPASS settings
-                                    np.mean(wfm_data[:1000]), # baseline
-                                    1750, # x_rise
-                                    1.05*(np.amax(wfm_data)-np.mean(wfm_data[:20])), # a_rise
-                                    0.011, # lambda_rise
-                                    1750, # x_decay
-                                    1.16*(np.amax(wfm_data)-np.amin(wfm_data)), # a_deca
-                                    0.00015] # lambda_decay
-                                popt, pcov = curve_fit(
-                                    f = fitfunction__independent_exponential_rise_and_fall__vec,
-                                    xdata = t_ns[:15000],
-                                    ydata = wfm_data[:15000],
-                                    p0 = p0_i,
-                                    sigma = None,
-                                    absolute_sigma = False,
-                                    method = [None, "lm", "trf", "dogbox"][0],
-                                    maxfev = 50000)
-                                perr = np.sqrt(np.diag(pcov))
-                                fitvals = fitfunction__independent_exponential_rise_and_fall__vec(
-                                    x = t_ns,
-                                    y_baseline = popt[0],
-                                    x_rise = popt[1],
-                                    a_rise = popt[2],
-                                    lambda_rise = popt[3],
-                                    x_decay = popt[4],
-                                    a_decay = popt[5],
-                                    lambda_decay = popt[6])
-                                pulse_height_adc__compass = np.uint64(line_list[3])
-                                pulse_height_adc__fitheight = np.amax(fitvals) -popt[0]
-                                pulse_height_adc__fitasymptote = popt[2]
-                                flag_pha = "fit_successful"
-                                print(f"fitted wfm No.: {ctr}")
-                            except:
-                                pulse_height_adc__compass = pulse_height_adc,
-                                pulse_height_adc__fitheight = pulse_height_adc,
-                                pulse_height_adc__fitasymptote = pulse_height_adc,
-                                flag_pha = "fit_failed"
-                            timestamp_data_tuple = (
-                                timestamp_ps,
-                                pulse_height_adc__compass,
-                                pulse_height_adc__fitheight,
-                                pulse_height_adc__fitasymptote,
-                                flag_mca,
-                                flag_pha)
-
-                        # debugging
-                        if flag_debug != "no_debugging":
-                            print(f"\n\n\n###############################################\n\n\n")
-                            print(f"wfm No.: {ctr}")
-                            fig, ax1 = plt.subplots(figsize=(5.670, 3.189), dpi=110, constrained_layout=True)
-                            plt.plot(
-                                t_ns,
-                                wfm_data,
-                                color = "black")
-                            ax1.set_xlabel(r"Time / $10\,\mathrm{ns}$")
-                            ax1.set_ylabel(r"Voltage / $\mathrm{adc\,\,channels}$")
-                            ax1.set_xlim(left=0, right=max(t_ns))
-                            if flag_pha == "fit_successful":
-                                print("parameters found:")
-                                print(f"\t\tpopt[0] = {popt[0]} whereas p0(baseline) = {p0_i[0]}")
-                                print(f"\t\tpopt[1] = {popt[1]} whereas p0(x_rise) = {p0_i[1]}")
-                                print(f"\t\tpopt[2] = {popt[2]} whereas p0(a_rise) = {p0_i[2]}")
-                                print(f"\t\tpopt[3] = {popt[3]} whereas p0(lambda_rise) = {p0_i[3]}")
-                                print(f"\t\tpopt[4] = {popt[4]} whereas p0(x_decay) = {p0_i[4]}")
-                                print(f"\t\tpopt[5] = {popt[5]} whereas p0(a_decay) = {p0_i[5]}")
-                                print(f"\t\tpopt[6] = {popt[6]} whereas p0(lambda_decay) = {p0_i[6]}")
-                                plt.plot(
-                                    t_ns,
-                                    fitfunction__independent_exponential_rise_and_fall__vec(
-                                        x = t_ns,
-                                        y_baseline = popt[0],
-                                        x_rise = popt[1],
-                                        a_rise = popt[2],
-                                        lambda_rise = popt[3],
-                                        x_decay = popt[4],
-                                        a_decay = popt[5],
-                                        lambda_decay = popt[6]),
-                                    color = color_monxe_cyan)
-                            elif flag_pha == "fit_failed":
-                                print("fit failed")
-                            else:
-                                print(f"something strange happened: 'flag_pha'={flag_pha}")
-                            plt.show()
-                            if flag_debug == "debug_storewfms":
-                                np.save(relpath_rawdatadebugging +"wfm_" +str(ctr) +".npy", wfm_data_ndarray)
-                                fig.savefig(relpath_rawdatadebugging +"wfm_" +str(ctr) +".png")
-
-                        # filling the individual wfm data into the 'timestamp_data_tuplelist'
-                        timestamp_data_tuplelist.append(timestamp_data_tuple)
-                        if ctr%1000==0:
-                            print(f"\t\t{ctr} events processed")
-                        ctr += 1
-
-            # retrieving raw data from MC2Analyzer list file
-            elif flag_daq == "mc2analyzer":
-                for line in input_file:
-                    line_list = list(line.split())
-                    if not line.startswith("HEADER") and ctr < flag_ctr:
+                        wfm_data_list = [int(wfm_sample) for wfm_sample in line_list[5:]]
+                # MC2
+                elif flag_daq == "MC2":
+                    if line.startswith("HEADER"):
+                        continue
+                    elif ctr <= flag_ctr:
+                        line_list = list(line.split())
                         timestamp_ps = 10000*np.uint64(line_list[0]) # the MCA stores timestamps in clock cycle units (one clock cycle corresponds to 10ns, 10ns = 10000ps)
                         pulse_height_adc = np.int64(line_list[1])
-                        extra = np.int64(line_list[2])
-                        timestamp_data_tuplelist.append((
-                            timestamp_ps,
-                            pulse_height_adc,
-                            extra))
+                        flag_mca = line_list[2]
+                # filling the 'timestamp_data_tuple' into 'timestamp_data_tuple_list'
+                timestamp_data_tuple = (timestamp_ps, pulse_height_adc, flag_mca) if flag_daq in ["MC2"] or flag_get_waveform_data == False else (timestamp_ps, pulse_height_adc, flag_mca, wfm_data_list)# exported data corresponding to 'raw_data_dtype'
+                if flag_get_waveform_data in [False, True]:
+                    timestamp_data_tuplelist.append(timestamp_data_tuple)
+                    ctr += 1
+                else:
+                    if timestamp_ps in flag_get_waveform_data:
+                        timestamp_data_tuplelist.append(timestamp_data_tuple)
                         ctr += 1
-                    elif line.startswith("HEADER") and ctr < flag_ctr:
-                        print(f"\theader line: {line[:-1]}")
-                    elif ctr < flag_ctr:
-                        print(f"\tunprocessed line: {line}")
-                    else:
-                        continue
+                if ctr%1000==0:
+                    print(f"\t----> {ctr} events processed")
+    print("")
 
-    # storing the extracted data in a numpy structured array
-    #retarray = np.sort(np.array(timestamp_data_tuplelist, raw_data_dtype), order="timestamp_ps")
-    retarray = np.sort(
-        np.array(
-            timestamp_data_tuplelist,
-            raw_data_dtype if flag_daq != "compass_custom" else raw_data_dtype_custom_pha),
-        order = "timestamp_ps")
-    if pathstring_output != "none":
-        np.save(pathstring_output, retarray)
+    ### storing the 'timestamp_data_tuple_list' in the numpy structured array 'retarray'
+    # saving the array locally
+    dt = np.dtype(raw_data_dtype_list) if flag_get_waveform_data == False else np.dtype(raw_data_dtype_list +[("wfm_data", np.int16, len(timestamp_data_tuplelist[0][-1]))])
+    retarray = np.array(timestamp_data_tuplelist, dt)
+    retarray = np.sort(retarray, order="timestamp_ps")
+    for abspath_output in flag_abspath_output_ndarray:
+        np.save(abspath_output, retarray)
+    print(f"{thisfunctionname}(): saved '{flag_abspath_output_ndarray}'")
+    print("")
+    # ghjgh
     t_f = datetime.datetime.now()
     t_run = t_f -t_i
-    print(f"\nget_raw_data_from_list_file(): retrieval time: {t_run} h")
-
+    print(f"{thisfunctionname}(): retrieval time: {t_run} h")
     # returning the raw data array
     return retarray
 
 
-# This function is used to print miscellaneous informations regarding the raw data retrieved from a MCA measurement
-def print_misc_meas_information(meas_ndarray):
-
-    print(f"\nprint_misc_meas_information(): measurement information:")
-
-    # general information
-    print(f"\tmeasurement duration: {get_measurement_duration(list_file_data=meas_ndarray, flag_unit='days'):.3f} days")
-    print(f"\trecorded events: {len(meas_ndarray)}")
-
-    # event groups
-    print(f"\t\tthereof in ch0: {len(meas_ndarray[(meas_ndarray['pulse_height_adc'] == 0)])} ({len(meas_ndarray[(meas_ndarray['pulse_height_adc'] == 0)])/len(meas_ndarray)*100:.2f} %)")
-    print(f"\t\tthereof within the first 50 adc channels: {len(meas_ndarray[(meas_ndarray['pulse_height_adc']<50)])} ({len(meas_ndarray[(meas_ndarray['pulse_height_adc']<50)])/len(meas_ndarray)*100:.2f} %)")
-    print(f"\t\tthereof in negative: {len(meas_ndarray[(meas_ndarray['pulse_height_adc'] < 0)])} ({len(meas_ndarray[(meas_ndarray['pulse_height_adc'] < 0)])/len(meas_ndarray)*100:.2f} %)")
-    print(f"\t\tthereof above max adc channel ({adc_channel_max}): {len(meas_ndarray[(meas_ndarray['pulse_height_adc'] > adc_channel_max)])} ({len(meas_ndarray[(meas_ndarray['pulse_height_adc'] > adc_channel_max)])/len(meas_ndarray)*100:.2f} %)")
-    # fit (only for CoMPASS DAQ)
-    if "flag_daq" in meas_ndarray.dtype.names:
-        print(f"\t\tthereof correctly fitted: {len(meas_ndarray[(meas_ndarray['flag_pha'] == 'fit_successful')])} ({len(meas_ndarray[(meas_ndarray['flag_pha'] == 'fit_successful')])/len(meas_ndarray)*100:.2f} %)")
-        print(f"\t\tthereof not fitted: {len(meas_ndarray[(meas_ndarray['flag_pha'] == 'fit_failed')])} ({len(meas_ndarray[(meas_ndarray['flag_pha'] == 'fit_failed')])/len(meas_ndarray)*100:.2f} %)")
-    # mca flags
-    mca_flag_list = []
-    for i in range(len(meas_ndarray)):
-        if meas_ndarray[i]["flag_mca"] not in mca_flag_list:
-            mca_flag_list.append(meas_ndarray[i]["flag_mca"])
-    for i in range(len(mca_flag_list)):
-        print(f"\t\tthereof with mca_flag '{mca_flag_list[i]}': {len(meas_ndarray[(meas_ndarray['flag_mca'] == mca_flag_list[i])])}")
-
-    # return
-    retlist = [
-        f"entries: {len(meas_ndarray)} (within first 50 adc channels: {len(meas_ndarray[(meas_ndarray['pulse_height_adc']<50)])})",
-        f"measurement duration: {get_measurement_duration(list_file_data=meas_ndarray, flag_unit='days'):.1f}" +r"$\,\mathrm{d}$"]
-    return retlist
-
-
 # This function is used to 
-def get_raw_data_dict(abspath_raw_data):
-
-    # generating and saving the raw data ndarry ('raw_data.npy')
-    measurement_directory = os.path.split(os.path.join(os.getcwd()))[1]
-    try: # reading mca list file(s) from attached external drive ...
-        raw_data = get_raw_data_from_list_file(
-            pathstring_input_data = abspath_monxe_measurements_external +measurement_directory +"/" +relpath_data_compass +filename_data_csv,
-            pathstring_output = abspath_raw_data,
-            flag_daq = ["mc2analyzer", "compass_auto", "compass_custom"][1],
-            flag_debug = ["no_debugging", "debug", "debug_storewfms"][0])
-    except: # ... or loading ndarray if drive not attached but already saved locally
-        raw_data = np.load(abspath_raw_data)
+def get_raw_data_dict(raw_data_ndarray):
 
     # initializing the 'misc_meas_information_dict'
     raw_data_dict = {
-        "measurement_duration_days" : get_measurement_duration(list_file_data=raw_data, flag_unit='days'),
+        "measurement_duration_days" : get_measurement_duration(list_file_data=raw_data_ndarray, flag_unit='days'),
         "recorded_events" : {
-            "total" : len(raw_data),
-            "thereof_in_ch0" : len(raw_data[(raw_data['pulse_height_adc'] == 0)]),
-            "thereof_in_first_50_adcc" : len(raw_data[(raw_data['pulse_height_adc']<50)]),
-            "thereof_in_negative_adcc" : len(raw_data[(raw_data['pulse_height_adc'] < 0)]),
-            "thereof_above_max_adcc" : len(raw_data[(raw_data['pulse_height_adc'] > adc_channel_max)]),
+            "total" : len(raw_data_ndarray),
+            "thereof_in_ch0" : len(raw_data_ndarray[(raw_data_ndarray['pulse_height_adc'] == 0)]),
+            "thereof_in_first_50_adcc" : len(raw_data_ndarray[(raw_data_ndarray['pulse_height_adc']<50)]),
+            "thereof_in_negative_adcc" : len(raw_data_ndarray[(raw_data_ndarray['pulse_height_adc'] < 0)]),
+            "thereof_above_max_adcc" : len(raw_data_ndarray[(raw_data_ndarray['pulse_height_adc'] > adc_channel_max)]),
         },
         "mca_flags" : {},
     }
 
     # adding mca flags
     mca_flag_list = []
-    for i in range(len(raw_data)):
-        if raw_data[i]["flag_mca"] not in mca_flag_list:
-            mca_flag_list.append(raw_data[i]["flag_mca"])
+    for i in range(len(raw_data_ndarray)):
+        if raw_data_ndarray[i]["flag_mca"] not in mca_flag_list:
+            mca_flag_list.append(raw_data_ndarray[i]["flag_mca"])
     for i in range(len(mca_flag_list)):
-        raw_data_dict["mca_flags"].update({mca_flag_list[i] : len(raw_data[(raw_data['flag_mca'] == mca_flag_list[i])])})
+        raw_data_dict["mca_flags"].update({mca_flag_list[i] : len(raw_data_ndarray[(raw_data_ndarray['flag_mca'] == mca_flag_list[i])])})
 
     # return the 'misc_meas_dict'
     return raw_data_dict
@@ -728,70 +623,64 @@ def get_measurement_duration(
     return t_ps *(1/conv_dict[flag_unit])
 
 
-# This function is used to plot the raw energy spectrum.
-def plot_raw_data(
-    measurement_data_dict,
-    raw_data_ndarray,
-    plot_settings_dict = {
-        "output_pathstrings" : [],
-        "plot_format" : "16_9",
-        "x_lim" : [0, n_adc_channels],
-        "x_label" : "alpha energy / adc channels",
-        "y_label" : "entries per channel"
-    }
-):
-
-    # generating histogram data from the 
-    data_histogram = get_histogram_data_from_timestamp_data(timestamp_data=raw_data_ndarray, histval="pulse_height_adc")
-
-    # figure formatting
-    fig, ax1 = plt.subplots(figsize=miscfig.image_format_dict[plot_settings_dict["plot_format"]]["figsize"], dpi=150)
-    xlim = plot_settings_dict["x_lim"]
-    ylim = [0,1.1*(max(data_histogram["counts"][(data_histogram["bin_centers"]>=xlim[0]) & (data_histogram["bin_centers"]<=xlim[1])] ))]
-    ax1.set_xlim(xlim)
-    ax1.set_ylim(ylim)
-    #ax1.set_yscale('log')
-    ax1.set_xlabel(plot_settings_dict["x_label"])
-    ax1.set_ylabel(plot_settings_dict["y_label"])
-
-    # plotting stepized histogram data
-    bin_centers, counts, counts_errors_lower, counts_errors_upper, bin_centers_mod, counts_mod = stepize_histogram_data(
-        bincenters = data_histogram["bin_centers"],
-        counts = data_histogram["counts"],
-        counts_errors_lower = data_histogram["counts_errors_lower"],
-        counts_errors_upper = data_histogram["counts_errors_upper"],
-        flag_addfirstandlaststep = True)
+# This function is used to plot a waveform from MCA raw data.
+def plot_mca_waveform(
+    wfm_x_data,
+    wfm_y_data,
+    plot_xlabel = r"$\Delta t \, $/$ \,\mathrm{\mu s}$",
+    plot_ylabel = r"$\Delta U\, $/$ \,\mathrm{V}$",
+    plot_linewidth = 0.5,
+    plot_linecolor = miscfig.uni_blue,
+    plot_x_lim = [0, 1, "rel"], # x-axis boundaries, relative to 'wfm_x_data' min and max
+    plot_y_lim = [-0.1, 1.1, "rel"], # y-axis boundaries, relative to wfm_y_data[0] and wfm_y_data[1]
+    plot_labelfontsize = 12,
+    plot_aspect_ratio = 9/16,
+    plot_figsize_x_inch = miscfig.standard_figsize_x_inch,
+    flag_output_abspath_list = False,
+    flag_show = True,
+    flag_comments_list = False,
+    comments_textcolor = "black",
+    comments_fontsize = 11,
+    comments_linesep = 0.1,
+    comments_textpos = [0.025, 0.9],
+    ):
+    # canvas
+    fig, ax1 = plt.subplots(figsize=[plot_figsize_x_inch,plot_figsize_x_inch*plot_aspect_ratio], dpi=150, constrained_layout=True)
+    # axes
+    if plot_x_lim[2] == "rel":
+        ax1.set_xlim([wfm_x_data[0] +plot_x_lim[0]*(wfm_x_data[-1]-wfm_x_data[0]), wfm_x_data[0] +plot_x_lim[1]*(wfm_x_data[-1]-wfm_x_data[0])])
+    elif plot_x_lim[2] == "abs":
+        ax1.set_xlim(plot_x_lim[0], plot_x_lim[1])
+    if plot_y_lim[2] == "rel":
+        ax1.set_ylim([np.min(wfm_y_data) +plot_y_lim[0]*(np.max(wfm_y_data)-np.min(wfm_y_data)), np.min(wfm_y_data) +plot_y_lim[1]*(np.max(wfm_y_data)-np.min(wfm_y_data))])
+    elif plot_y_lim[2] == "abs":
+        ax1.set_ylim(plot_y_lim[0], plot_y_lim[1])
+    ax1.set_xlabel(plot_xlabel, fontsize=plot_labelfontsize)
+    ax1.set_ylabel(plot_ylabel, fontsize=plot_labelfontsize)
+    # plotting
     plt.plot(
-        bin_centers_mod,
-        counts_mod,
-        linewidth = 0.4,
-        color=color_histogram,
-        linestyle='-',
-        zorder=1,
-        label="fdfa")
-
+        wfm_x_data,
+        wfm_y_data,
+        linewidth = plot_linewidth,
+        color = plot_linecolor,
+        linestyle = '-')
     # annotations
-    #monxeana.annotate_documentation_json(
-    #    annotate_ax=ax1,
-    #    filestring_documentation_json = "./documentation.json",
-    #    text_fontsize = 11,
-    #    text_color = "black",
-    #    text_x_i = 0.03,
-    #    text_y_i = 0.75,
-    #    text_parskip = 0.09,
-    #    #flag_keys = ["amplifier", "start", "end"],
-    #    flag_addduration=True,
-    #    flag_print_comment=False,
-    #    flag_orientation="left"
-    #)
-    #plt.legend()
-
-    # saving the output plot
-    plt.show()
-    for i in range(len(plot_settings_dict["output_pathstrings"])):
-        fig.savefig(plot_settings_dict["output_pathstrings"][i])
-
-    return fig, ax1
+    if flag_comments_list != False:
+        annotate_comments(
+            comment_ax = ax1,
+            comment_list = flag_comments_list,
+            comment_textpos = comments_textpos,
+            comment_textcolor = comments_textcolor,
+            comment_linesep = comments_linesep,
+            comment_fontsize = comments_fontsize,
+            flag_alignment = ["top_to_bottom", "symmetric"])
+    # saving
+    if flag_show:
+        plt.show()
+    if flag_output_abspath_list != False:
+        for output_abspath in flag_output_abspath_list:
+            fig.savefig(output_abspath)
+    return
 
 
 
@@ -872,23 +761,33 @@ def get_histogram_data_from_timestamp_data(
 
 # This function is used to stepize arbitrary histogram data.
 # I.e. it takes two list-like objects representing both the bin centers and also the corresponding counts and calculates two new lists containing both the left and right edges of the bins and two instances of the counts.
-def stepize_histogram_data(bincenters, counts, counts_errors_lower, counts_errors_upper, flag_addfirstandlaststep=True):
+def stepize_histogram_data(
+    bincenters,
+    counts,
+    counts_errors_lower = [],
+    counts_errors_upper = [],
+    flag_addfirstandlaststep = True):
+
     # calculating the binwidth and initializing the lists
-    binwidth = bincenters[1]-bincenters[0]
+    binwidth = bincenters[1] -bincenters[0]
     bincenters_stepized = np.zeros(2*len(bincenters))
     counts_stepized = np.zeros(2*len(counts))
-    counts_errors_lower_stepized = np.zeros(2*len(counts))
-    counts_errors_upper_stepized = np.zeros(2*len(counts))
+    counts_errors_lower_stepized = np.zeros(2*len(counts_errors_lower))
+    counts_errors_upper_stepized = np.zeros(2*len(counts_errors_upper))
+
     # stepizing the data
     for i in range(len(bincenters)):
         bincenters_stepized[2*i] = bincenters[i] -0.5*binwidth
         bincenters_stepized[(2*i)+1] = bincenters[i] +0.5*binwidth
         counts_stepized[2*i] = counts[i]
         counts_stepized[2*i+1] = counts[i]
+    for i in range(len(counts_errors_lower)):
         counts_errors_lower_stepized[2*i] = counts_errors_lower[i]
         counts_errors_lower_stepized[2*i+1] = counts_errors_lower[i]
+    for i in range(len(counts_errors_upper)):
         counts_errors_upper_stepized[2*i] = counts_errors_upper[i]
         counts_errors_upper_stepized[2*i+1] = counts_errors_upper[i]
+
     # appending a zero to both the beginning and end so the histogram can be plotted even nicer
     bin_centers_stepized_mod = [bincenters_stepized[0]] +list(bincenters_stepized) +[bincenters_stepized[len(bincenters_stepized)-1]]
     counts_stepized_mod = [0] +list(counts_stepized) +[0]
@@ -1181,262 +1080,242 @@ def calc_peak_data(
     return
 
 
-
-# one possible energy-channel relation: linear
-def energy_channel_relation_function_linear(x, m, t):
-    if hasattr(x, "__len__"):
-        return [m*xi +t for xi in x]
-    else:
-        return m*x +t
-
-
-# This function is used to calculate the energy-channel relation coefficients for a given peak_data_dict.
-def energy_calibration(peak_data_dict, energy_channel_relation_function):
-
-    # extracting the (adcc,energy) data points
-    adcc_list = []
-    adcc_error_list = []
-    e_mev_list = []
-    for peaknum in [peaknum for peaknum in [*peak_data_dict] if "a_priori" in [*peak_data_dict[peaknum]]]:
-        adcc_list.append(peak_data_dict[peaknum]["fit_data"]["mu"])
-        adcc_error_list.append(peak_data_dict[peaknum]["fit_data_errors"]["mu"])
-        e_mev_list.append(peak_data_dict[peaknum]["a_priori"]["alpha_energy_kev"]/1000)
-
-    # curve_fit output: 
-    p_opt, p_cov = curve_fit(
-        f = energy_channel_relation_function,
-        xdata = adcc_list,
-        ydata = e_mev_list,
-        #sigma = fit_data["counts_errors"],
-        #absolute_sigma = True,
-        method = 'lm' # "lm" cannot handle covariance matrices with deficient rank
-    )
-    
-    # extracting the 'linear_function' coefficients
-    p_err = np.sqrt(np.diag(p_cov))
-
-    # returning the determined optimal parameters for the energy-channel relation
-    return p_opt, p_err
-
-
 # This function is used to extract the 'peak_data_dict' from 'raw_data' and 'measurement_data'.
-def get_peak_data_dict(
+def get_spectrum_data_output_dict(
     measurement_data_dict,
     raw_data_ndarray,
-    peak_fit_settings_dict = {
-        "fit_range" : [8000, 13000],
-        "rebin" : 1,
-        "p_opt_guess" : ( # n x 5-tuple, whereas n corresponds to the number of peaks visible in the spectrum (fit parameters: mu, sigma, alpha, n, N)
-            8600, 25, 1, 1, 100, # po210
-            9500, 25, 1, 1, 100, # po218
-            12400, 25, 1, 1, 100 # po214
-        ),
-        "a_priori_knowledge" : {
-            "1" : "po218",
-            "2" : "po214"
-        },
-    },
 ):
 
-    # manual input
-    flag_axis = ["adc_channels", "energy_calibrated"][1]
-    rebin = peak_fit_settings_dict["rebin"]
-    fitrange = peak_fit_settings_dict["fit_range"]
-    p_opt_guess = peak_fit_settings_dict["p_opt_guess"]
+    ### profile: 'crystal_ball_fit_with_linear_energy_channel_relation'
+    if measurement_data_dict["spectrum_data_input"]["flag_spectrum_data"] == "crystal_ball_fit_with_linear_energy_channel_relation":
 
-    # generating rebinned histogram data
-    data_histogram_rebinned = get_histogram_data_from_timestamp_data(
-        timestamp_data = raw_data_ndarray,
-        number_of_bins = int(n_adc_channels/rebin))
+        # generating rebinned histogram data
+        data_histogram_rebinned = get_histogram_data_from_timestamp_data(
+            timestamp_data = raw_data_ndarray,
+            number_of_bins = int(n_adc_channels/measurement_data_dict["spectrum_data_input"]["rebin"]))
 
-    # fitting the peaks
-    peak_data_dict = fit_range_mult_crystal_ball(
-        n = int(len(p_opt_guess)/5),
-        histogram_data = data_histogram_rebinned,
-        fit_range = fitrange,
-        p0 = p_opt_guess)
+        # fitting the histogram with Crystal Ball functions
+        crystal_ball_peak_fit_data_dict = fit_range_mult_crystal_ball(
+            n = int(len(measurement_data_dict["spectrum_data_input"]["p_opt_guess"])/5),
+            histogram_data = data_histogram_rebinned,
+            fit_range = measurement_data_dict["spectrum_data_input"]["fit_range"],
+            p0 = measurement_data_dict["spectrum_data_input"]["p_opt_guess"])
 
-    # including the 'peak_fit_settings' into the 'peak_data_dict'
-    peak_data_dict.update({"peak_fit_settings" : peak_fit_settings_dict})
-    
-    # including the 'a_priori_knowledge_dict' into the 'peak_data_dict'
-    for i in [*peak_fit_settings_dict["a_priori_knowledge"]]:
-        peak_data_dict[i].update({"a_priori" : isotope_dict[peak_fit_settings_dict["a_priori_knowledge"][i]]})
+        # fitting a the energy-channel relation with a linear function
+        adcc_list = []
+        adcc_error_list = []
+        e_mev_list = []
+        for peaknum in measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"]:
+            adcc_list.append(crystal_ball_peak_fit_data_dict[peaknum]["fit_data"]["mu"])
+            adcc_error_list.append(crystal_ball_peak_fit_data_dict[peaknum]["fit_data_errors"]["mu"])
+            e_mev_list.append(isotope_dict[measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"][peaknum]]["alpha_energy_kev"]/1000)
+        p_opt, p_cov = curve_fit(
+            f = function_linear_vec,
+            xdata = adcc_list,
+            ydata = e_mev_list,
+            #sigma = fit_data["counts_errors"],
+            #absolute_sigma = True,
+            method = 'lm' # "lm" cannot handle covariance matrices with deficient rank
+        )
+        p_err = np.sqrt(np.diag(p_cov))
 
-    # peak data calculations (i.e. determine resolution, number of counts, etc...)
-    #calc_peak_data(
-    #    peak_data_dictionary = peak_data_dict,
-    #    timestamp_data_ndarray = data_raw,
-    #    n_sigma_left = 10,
-    #    n_sigma_right = 4)
-    
-    return peak_data_dict
+        # peak data calculations (i.e. determine resolution, number of counts, etc...)
+        #calc_peak_data(
+        #    peak_data_dictionary = peak_data_dict,
+        #    timestamp_data_ndarray = data_raw,
+        #    n_sigma_left = 10,
+        #    n_sigma_right = 4)
+
+        # filling the 'spectrum_data_output_dict'
+        spectrum_data_output_dict = {
+            "histogram" : {
+                "bin_centers_adc" : [str(entry) for entry in data_histogram_rebinned["bin_centers"]],
+                "counts" : [str(entry) for entry in data_histogram_rebinned["counts"]],
+                "counts_errors_lower" : [str(entry) for entry in data_histogram_rebinned["counts_errors_lower"]],
+                "counts_errors_upper" : [str(entry) for entry in data_histogram_rebinned["counts_errors_upper"]],
+            },
+            "peak_fits" : crystal_ball_peak_fit_data_dict,
+            "energy_channel_relation_fit" : {
+                "fit_data": {
+                    "m" : p_opt[0],
+                    "t" : p_opt[1]},
+                "fit_data_errors" : {
+                    "m" : p_err[0],
+                    "t" : p_err[1]},
+            },
+        }
+
+    return spectrum_data_output_dict
 
 
-# This function is used to plot the peak data.
-def plot_peak_data(
-    measurement_data_dict,
+# This function is used to plot a monxe spectrum.
+# So far only works with measurement_data_dict['spectrum_data_input']['flag_spectrum_data'] == "crystal_ball_fit_with_linear_energy_channel_relation"
+def plot_mca_spectrum(
     raw_data_ndarray,
-    plot_settings_dict = {
-        "output_pathstrings" : [],
-        "plot_format" : "16_9",
-        "x_lim_adcc" : [0, n_adc_channels],
-        "rebin" : 1,
-        "flag_x_axis_units" : ["adc_channels", "mev"][1],
-        "energy_channel_relation" : [energy_channel_relation_function_linear][0],
-        "flag_errors" : ["poissonian"][0],
-        "flag_plot_errors" : [False, True][0],
-        "flag_plot_fits" : ["none", "all", "known", "po218+po214"][3],
-        "flag_preliminary" : [True, False][0],
-        "flag_show_isotope_windows" : [False,True][1],
-        "flag_show_peak_labels" : [False, True][1]
-    }
+    measurement_data_dict = {},
+    # plot stuff
+    plot_aspect_ratio = 9/16,
+    plot_figsize_x_inch = miscfig.standard_figsize_x_inch,
+    plot_xlabel = ["", "jfk"][0],
+    plot_ylabel = ["", "jfk"][0], # y-axis label, if "" then automatically derived from binwidth and axis scale
+    plot_x_lim = [0, 1, "rel"],
+    plot_y_lim = [0.0, 1.1, "rel"],
+    plot_linewidth = 0.5,
+    plot_linecolor = "black",
+    plot_labelfontsize = 11,
+    # flags
+    flag_x_axis_units = ["adc_channels", "mev"][0],
+    flag_plot_histogram_data_from = ["raw_data_ndarray", "spectrum_data"][0],
+    flag_setylogscale = False,
+    flag_output_abspath_list = [False, ["~/jfk.png"]][0],
+    flag_show = True,
+    flag_errors = [False, "poissonian"][0],
+    flag_plot_fits = [], # list of fits to be plotted, given in peak numbers
+    flag_preliminary = [False, True][0],
 ):
 
-    # generating rebinned histogram data
-    data_histogram_rebinned = get_histogram_data_from_timestamp_data(
-        timestamp_data = raw_data_ndarray,
-        number_of_bins = int(n_adc_channels/plot_settings_dict["rebin"]),
-        flag_errors = plot_settings_dict["flag_errors"])
+    # canvas
+    fig, ax1 = plt.subplots(figsize=[plot_figsize_x_inch,plot_figsize_x_inch*plot_aspect_ratio], dpi=150, constrained_layout=True)
 
-    # figure formatting
-    fig, ax1 = plt.subplots(figsize=miscfig.image_format_dict[plot_settings_dict["plot_format"]]["figsize"], dpi=150)
-    y_lim = [0, 1.1*(max(data_histogram_rebinned["counts"]) +max(data_histogram_rebinned["counts_errors_upper"]))]
-    y_lim = [0, 1.1*(max(data_histogram_rebinned["counts"]))]
-    ax1.set_ylim(y_lim)
-    x_lim = plot_settings_dict["x_lim_adcc"]
-    x_width = x_lim[1] -x_lim[0]
-    y_width = y_lim[1] -y_lim[0]
-    #ax1.set_yscale('log')
-    binwidth_adcc = float(data_histogram_rebinned['bin_centers'][2]-data_histogram_rebinned['bin_centers'][1])
-    if plot_settings_dict["flag_x_axis_units"] == "adc_channels":
-        ax1.set_xlabel(r"alpha energy / $\mathrm{adc\,channels}$")
-        ax1.set_ylabel(r"entries per " +f"{binwidth_adcc:.1f}" +r" adc channels")
-        ax1.set_xlim(x_lim)
-    elif plot_settings_dict["flag_x_axis_units"] == "mev":
-        p_opt, p_err = energy_calibration(peak_data_dict=measurement_data_dict["peak_data"], energy_channel_relation_function=plot_settings_dict["energy_channel_relation"])
-        binwidth_mev = np.sqrt((plot_settings_dict["energy_channel_relation"](1, *p_opt)-plot_settings_dict["energy_channel_relation"](0, *p_opt))**2)
-        ax1.set_xlabel(r"alpha energy / $\mathrm{MeV}$")
-        ax1.set_ylabel(r"entries per " +f"{binwidth_mev*1000:.2f}" +r" $\mathrm{keV}$")
-        ax1.set_xlim([plot_settings_dict["energy_channel_relation"](x_lim[0], *p_opt), plot_settings_dict["energy_channel_relation"](x_lim[1], *p_opt)])
+    # retrieving the histogram data to be plotted
+    data_histogram = get_histogram_data_from_timestamp_data(timestamp_data=raw_data_ndarray, histval="pulse_height_adc")
+    x_data = data_histogram["bin_centers"]
+    y_data = data_histogram["counts"]
+    if flag_plot_histogram_data_from == ["spectrum_data"]:
+        x_data_adc = [float(entry) for entry in measurement_data_dict["spectrum_data_output"]["histogram"]["bin_centers_adc"]]
+        x_data = [float(entry) for entry in measurement_data_dict["spectrum_data_output"]["histogram"]["bin_centers_adc"]]
+        y_data = [float(entry) for entry in measurement_data_dict["spectrum_data_output"]["histogram"]["counts"]]
+    binwidth = x_data[2] -x_data[1]
+    ylabel = r"entries per " +f"{binwidth:.1f}" +r" adc channels"
+    xlabel = r"alpha energy / adc channels"
+    if flag_x_axis_units == "mev":
+        x_data = function_linear_vec(x=x_data, m=measurement_data_dict["spectrum_data_output"]["energy_channel_relation_fit"]["fit_data"]["m"], t=measurement_data_dict["spectrum_data_output"]["energy_channel_relation_fit"]["fit_data"]["t"])
+        binwidth = float(x_data[2]) -float(x_data[1])
+        ylabel = r"entries per " +f"{binwidth*1000:.2f}" +r" $\mathrm{keV}$"
+        xlabel = r"alpha energy / $\mathrm{MeV}$"
+
+    # axes
+    if plot_x_lim[2] == "rel":
+        xlim = [x_data[0] +plot_x_lim[0]*(x_data[-1]-x_data[0]), x_data[0] +plot_x_lim[1]*(x_data[-1]-x_data[0])]
+    elif plot_x_lim[2] == "abs":
+        xlim = [plot_x_lim[0], plot_x_lim[1]]
+    if plot_y_lim[2] == "rel":
+        ylim = [min(y_data) +plot_y_lim[0]*(max(y_data)-min(y_data)), min(y_data) +plot_y_lim[1]*(max(y_data)-min(y_data))]
+    elif plot_y_lim[2] == "abs":
+        ylim = [plot_y_lim[0], plot_y_lim[1]]
+    ax1.set_xlim(xlim)
+    ax1.set_ylim(ylim)
+    xlabel = plot_xlabel if plot_xlabel != "" else xlabel
+    ylabel = plot_ylabel if plot_ylabel != "" else ylabel
+    ax1.set_xlabel(xlabel, fontsize=plot_labelfontsize)
+    ax1.set_ylabel(ylabel, fontsize=plot_labelfontsize)
+    if flag_setylogscale:
+        ax1.set_yscale('log')
 
     # plotting the stepized histogram
     bin_centers, counts, counts_errors_lower, counts_errors_upper, bin_centers_mod, counts_mod = stepize_histogram_data(
-        bincenters = data_histogram_rebinned["bin_centers"],
-        counts = data_histogram_rebinned["counts"],
-        counts_errors_lower = data_histogram_rebinned["counts_errors_lower"],
-        counts_errors_upper = data_histogram_rebinned["counts_errors_upper"],
+        bincenters = x_data,
+        counts = y_data,
         flag_addfirstandlaststep = True)
     plt.plot(
-        bin_centers_mod if plot_settings_dict["flag_x_axis_units"]=="adc_channels" else [plot_settings_dict["energy_channel_relation"](xi, *p_opt) for xi in bin_centers_mod],
+        bin_centers_mod,
         counts_mod,
-        linewidth=linewidth_histogram_std,
-        color=color_histogram,
-        linestyle='-',
-        zorder=1,
-        label="fdfa")
+        linewidth = plot_linewidth,
+        color = plot_linecolor,
+        linestyle = '-',
+        zorder = 1,
+        label = "jfk")
 
-    # plotting the Poissonian errors
-    if plot_settings_dict["flag_plot_errors"]:
-        plt.fill_between(
-            bin_centers if plot_settings_dict["flag_x_axis_units"]=="adc_channels" else [plot_settings_dict["energy_channel_relation"](xi, *p_opt) for xi in bin_centers],
-            counts-counts_errors_lower,
-            counts+counts_errors_upper,
-            color = color_histogram_error,
-            alpha = 1,
-            zorder = 0,
-            interpolate = True)
-
-    ### plotting the fits
-    if plot_settings_dict["flag_plot_fits"] != "none":
-        # determining what peak fits to plot
-        fit_data_x_vals = np.linspace(start=x_lim[0], stop=x_lim[1], endpoint=True, num=500)
-        all_peaks = [*measurement_data_dict["peak_data"]]
-        known_peaks = [peaknum for peaknum in all_peaks if "a_priori" in [*measurement_data_dict["peak_data"][peaknum]]]
-        if plot_settings_dict["flag_plot_fits"] == "all":
-            fitlist = all_peaks
-        elif plot_settings_dict["flag_plot_fits"] == "known":
-            fitlist = known_peaks
-        elif plot_settings_dict["flag_plot_fits"] == "po218+po214":
-            fitlist = [peaknum for peaknum in known_peaks if measurement_data_dict["peak_data"][peaknum]["a_priori"]["isotope"] in ["po218", "po214"]]
-        # plotting the selected peaks
-        for peaknum in fitlist:
+    # plotting the fits
+    if flag_plot_fits != []:
+        #fit_x_data = np.linspace(start=xlim[0], stop=xlim[1], endpoint=True, num=500)
+        for peaknum in [str(peaknum) for peaknum in flag_plot_fits]:
             plt.plot(
-                fit_data_x_vals if plot_settings_dict["flag_x_axis_units"]=="adc_channels" else [plot_settings_dict["energy_channel_relation"](xi, *p_opt) for xi in fit_data_x_vals],
-                [function_crystal_ball_one(adcc, **measurement_data_dict["peak_data"][peaknum]["fit_data"]) for adcc in fit_data_x_vals],
+                x_data,
+                [function_crystal_ball_one(x_data_adc_val, **measurement_data_dict["spectrum_data_output"]["peak_fits"][peaknum]["fit_data"]) for x_data_adc_val in x_data_adc],
                 linewidth = 1.5,
-                color = isotope_dict[measurement_data_dict["peak_data"][peaknum]["a_priori"]["isotope"]]["color"] if "a_priori" in [*measurement_data_dict["peak_data"][peaknum]] else color_monxe_cyan,
+                color = isotope_dict[measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"][peaknum]]["color"] if peaknum in [*measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"]] else "red",
                 linestyle = '-',
                 zorder = 1,
                 label = "fit") #r"$" +peak_data_dict[key]["isotope_data"]["latex_label"] +r"$")
 
+    # plotting the Poissonian errors
+#    if flag_plot_errors:
+#        plt.fill_between(
+#            bin_centers if flag_x_axis_units=="adc_channels" else [energy_channel_relation(xi, *p_opt) for xi in bin_centers],
+#            counts-counts_errors_lower,
+#            counts+counts_errors_upper,
+#            color = color_histogram_error,
+#            alpha = 1,
+#            zorder = 0,
+#            interpolate = True)
 
     ### annotations
-    all_peaks = [*measurement_data_dict["peak_data"]]
-    known_peaks = [peaknum for peaknum in all_peaks if "a_priori" in [*measurement_data_dict["peak_data"][peaknum]]]
-    # annotationg the MonXe logo
-    #miscfig.image_onto_plot(
-    #    filestring = "monxe_logo__transparent_bkg.png",
-    #    ax=ax1,
-    #    position=(x_lim[0]+0.90*(x_lim[1]-x_lim[0]),y_lim[0]+0.87*(y_lim[1]-y_lim[0])),
-    #    pathstring = pathstring_miscellaneous_figures +"monxe_logo/",
-    #    zoom=0.02,
-    #    zorder=0)
-    # peak labels
-    if plot_settings_dict["flag_show_peak_labels"] == True:
-        for peaknum in known_peaks:
-            plt.text(
-                x = measurement_data_dict["peak_data"][peaknum]["fit_data"]["mu"] -0.02*x_width if plot_settings_dict["flag_x_axis_units"]=="adc_channels" else plot_settings_dict["energy_channel_relation"](measurement_data_dict["peak_data"][peaknum]["fit_data"]["mu"] -0.02*x_width, *p_opt),
-                y = 1.02*function_crystal_ball_one(x=measurement_data_dict["peak_data"][peaknum]["fit_data"]["mu"], **measurement_data_dict["peak_data"][peaknum]["fit_data"]),
-                #transform = ax1.transAxes,
-                s = r"$" +isotope_dict[measurement_data_dict["peak_data"][peaknum]["a_priori"]["isotope"]]["latex_label"] +r"$",
-                color = "black",
-                fontsize = 11,
-                verticalalignment = 'center',
-                horizontalalignment = 'right')
-    # shading the fit region
-    #ax1.axvspan(
-    #    fitrange[0] if plot_settings_dict["flag_x_axis_units"]=="adc_channels" else plot_settings_dict["energy_channel_relation"](fitrange[0], *p_opt),
-    #    fitrange[1] if plot_settings_dict["flag_x_axis_units"]=="adc_channels" else plot_settings_dict["energy_channel_relation"](fitrange[1], *p_opt),
-    #    alpha = 0.5,
-    #    linewidth = 0,
-    #    color = 'grey',
-    #    zorder = -50)
-    # shading the isotope windows (i.e., the extracted counts)
-    if "activity_data" in [*measurement_data_dict] and plot_settings_dict["flag_show_isotope_windows"] == True:
-        for peaknum in known_peaks:
-            isotope_window_adcc = measurement_data_dict["activity_data"]["decay_model_fit_results"][measurement_data_dict["peak_data"][peaknum]["a_priori"]["isotope"]]["window_adcc"]
-            ax1.axvspan(
-                isotope_window_adcc[0] if plot_settings_dict["flag_x_axis_units"] == "adc_channels" else plot_settings_dict["energy_channel_relation"](isotope_window_adcc[0], *p_opt),
-                isotope_window_adcc[1] if plot_settings_dict["flag_x_axis_units"] == "adc_channels" else plot_settings_dict["energy_channel_relation"](isotope_window_adcc[1], *p_opt),
-                alpha = 0.5,
-                linewidth = 0,
-                color = isotope_dict[measurement_data_dict["peak_data"][peaknum]["a_priori"]["isotope"]]["color"],
-                zorder = -50)
-    # measurement comments
-    #monxeana.annotate_comments(
-    #    comment_ax = ax1,
-    #    comment_list = [
-    #        r"calibration activity: $(19.6\pm 2.1)\,\mathrm{mBq}$",
-    #        r"entries total: " +f"{len(data_raw)}",
-    #        r"measurement duration: " +f"{monxeana.get_measurement_duration(list_file_data=data_raw, flag_unit='days'):.3f} days",
-    #    ],
-    #    comment_textpos = [0.025, 0.9],
-    #    comment_textcolor = "black",
-    #    comment_linesep = 0.1,
-    #    comment_fontsize = 11)
-    # annotating 
-    #plt.text(
-    #    x = peak_data_dict["2"]["fit_data"]["mu"] -0.02*x_width,
-    #    y = 1.02*monxeana.function_crystal_ball_one(x=peak_data_dict["2"]["fit_data"]["mu"], **peak_data_dict["2"]["fit_data"]) -0.06*y_width,
-    #    #transform = ax1.transAxes,
-    #    s = r"$R=" +f"{peak_data_dict['2']['resolution']['resolution_in_percent']:.1f}" +r"\,\%$",
-    #    color = "black",
-    #    fontsize = 11,
-    #    verticalalignment = 'center',
-    #    horizontalalignment = 'right')
+#    all_peaks = [*measurement_data_dict["spectrum_data_output"]]
+#    known_peaks = [peaknum for peaknum in all_peaks if "a_priori" in [*measurement_data_dict["spectrum_data_input"][peaknum]]]
+#    # annotationg the MonXe logo
+#    #miscfig.image_onto_plot(
+#    #    filestring = "monxe_logo__transparent_bkg.png",
+#    #    ax=ax1,
+#    #    position=(x_lim[0]+0.90*(x_lim[1]-x_lim[0]),y_lim[0]+0.87*(y_lim[1]-y_lim[0])),
+#    #    pathstring = pathstring_miscellaneous_figures +"monxe_logo/",
+#    #    zoom=0.02,
+#    #    zorder=0)
+#    # peak labels
+#    if flag_show_peak_labels == True:
+#        for peaknum in known_peaks:
+#            plt.text(
+#                x = measurement_data_dict["spectrum_data_output"][peaknum]["fit_data"]["mu"] -0.02*x_width if flag_x_axis_units=="adc_channels" else energy_channel_relation(measurement_data_dict["spectrum_data_output"][peaknum]["fit_data"]["mu"] -0.02*x_width, *p_opt),
+#                y = 1.02*function_crystal_ball_one(x=measurement_data_dict["spectrum_data_output"][peaknum]["fit_data"]["mu"], **measurement_data_dict["spectrum_data_output"][peaknum]["fit_data"]),
+#                #transform = ax1.transAxes,
+#                s = r"$" +isotope_dict[measurement_data_dict["spectrum_data_input"][peaknum]["a_priori"]["isotope"]]["latex_label"] +r"$",
+#                color = "black",
+#                fontsize = 11,
+#                verticalalignment = 'center',
+#                horizontalalignment = 'right')
+#    # shading the fit region
+#    #ax1.axvspan(
+#    #    fitrange[0] if flag_x_axis_units=="adc_channels" else energy_channel_relation(fitrange[0], *p_opt),
+#    #    fitrange[1] if flag_x_axis_units=="adc_channels" else energy_channel_relation(fitrange[1], *p_opt),
+#    #    alpha = 0.5,
+#    #    linewidth = 0,
+#    #    color = 'grey',
+#    #    zorder = -50)
+#    # shading the isotope windows (i.e., the extracted counts)
+#    if "activity_data" in [*measurement_data_dict] and flag_show_isotope_windows == True:
+#        for peaknum in known_peaks:
+#            isotope_window_adcc = measurement_data_dict["activity_data"]["decay_model_fit_results"][measurement_data_dict["spectrum_data_input"][peaknum]["a_priori"]["isotope"]]["window_adcc"]
+#            ax1.axvspan(
+#                isotope_window_adcc[0] if flag_x_axis_units == "adc_channels" else energy_channel_relation(isotope_window_adcc[0], *p_opt),
+#                isotope_window_adcc[1] if flag_x_axis_units == "adc_channels" else energy_channel_relation(isotope_window_adcc[1], *p_opt),
+#                alpha = 0.5,
+#                linewidth = 0,
+#                color = isotope_dict[measurement_data_dict["spectrum_data_input"][peaknum]["a_priori"]["isotope"]]["color"],
+#                zorder = -50)
+#    # measurement comments
+#    #monxeana.annotate_comments(
+#    #    comment_ax = ax1,
+#    #    comment_list = [
+#    #        r"calibration activity: $(19.6\pm 2.1)\,\mathrm{mBq}$",
+#    #        r"entries total: " +f"{len(data_raw)}",
+#    #        r"measurement duration: " +f"{monxeana.get_measurement_duration(list_file_data=data_raw, flag_unit='days'):.3f} days",
+#    #    ],
+#    #    comment_textpos = [0.025, 0.9],
+#    #    comment_textcolor = "black",
+#    #    comment_linesep = 0.1,
+#    #    comment_fontsize = 11)
+#    # annotating 
+#    #plt.text(
+#    #    x = peak_data_dict["2"]["fit_data"]["mu"] -0.02*x_width,
+#    #    y = 1.02*monxeana.function_crystal_ball_one(x=peak_data_dict["2"]["fit_data"]["mu"], **peak_data_dict["2"]["fit_data"]) -0.06*y_width,
+#    #    #transform = ax1.transAxes,
+#    #    s = r"$R=" +f"{peak_data_dict['2']['resolution']['resolution_in_percent']:.1f}" +r"\,\%$",
+#    #    color = "black",
+#    #    fontsize = 11,
+#    #    verticalalignment = 'center',
+#    #    horizontalalignment = 'right')
     # marking as 'preliminary'
-    if plot_settings_dict["flag_preliminary"] == True:
+    if flag_preliminary == True:
         plt.text(
             x = 0.97,
             y = 0.95,
@@ -1449,12 +1328,13 @@ def plot_peak_data(
     # legend
     #plt.legend()
 
-    # saving the output plot
-    plt.show()
-    for i in range(len(plot_settings_dict["output_pathstrings"])):
-        fig.savefig(plot_settings_dict["output_pathstrings"][i])
-
-    return fig, ax1
+    # saving
+    if flag_show:
+        plt.show()
+    if flag_output_abspath_list != []:
+        for output_abspath in flag_output_abspath_list:
+            fig.savefig(output_abspath)
+    return
 
 
 
@@ -1608,7 +1488,92 @@ def bi214(
     if t<= 0:
         return 0
     else:
-        return isotope_dict["bi214"]["decay_constant"] *((isotope_dict["bi214"]["decay_constant"]**4*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*n214bi0 + (-1 + np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)))*isotope_dict["pb214"]["decay_constant"]*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*isotope_dict["po218"]["decay_constant"]*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*isotope_dict["rn222"]["decay_constant"]*(-isotope_dict["po218"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])*r + isotope_dict["bi214"]["decay_constant"]**2*((-isotope_dict["pb214"]["decay_constant"]**2)*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*(isotope_dict["rn222"]["decay_constant"]**2*(n214bi0 + n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))*n214pb0) + isotope_dict["po218"]["decay_constant"]**2*(n214bi0 - (-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)))*(n214pb0 + n218po0)) + isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*(n214bi0 - (-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)))*(2*n214pb0 + n218po0))) + isotope_dict["po218"]["decay_constant"]*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*isotope_dict["rn222"]["decay_constant"]*(isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*n214bi0 + (-np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)))*isotope_dict["po218"]["decay_constant"]*r + (-np.exp(isotope_dict["bi214"]["decay_constant"]*t) + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)))*isotope_dict["rn222"]["decay_constant"]*r) + isotope_dict["pb214"]["decay_constant"]*((-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*isotope_dict["po218"]["decay_constant"]**2*isotope_dict["rn222"]["decay_constant"]**2*n218po0 + isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]**3*((-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)))*n214pb0 + (np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)) - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*(n218po0 + n222rn0)) - (np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*isotope_dict["rn222"]["decay_constant"]**3*r + isotope_dict["po218"]["decay_constant"]**3*(isotope_dict["rn222"]["decay_constant"]*(n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))*n214pb0 + n218po0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))*n218po0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))*n222rn0 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t))*n222rn0) + (np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t)))*r)) + isotope_dict["pb214"]["decay_constant"]**3*(isotope_dict["po218"]["decay_constant"]**2*(n214bi0 + n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))*n214pb0 + n218po0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t))*n218po0) - isotope_dict["rn222"]["decay_constant"]*(isotope_dict["rn222"]["decay_constant"]*(n214bi0 + n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))*n214pb0) + (-np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*r) + isotope_dict["po218"]["decay_constant"]*((-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*isotope_dict["rn222"]["decay_constant"]*n218po0 + (np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)) - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t)))*isotope_dict["rn222"]["decay_constant"]*n222rn0 + (-np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t)))*r))) + isotope_dict["bi214"]["decay_constant"]*((-isotope_dict["pb214"]["decay_constant"])*isotope_dict["po218"]["decay_constant"]**2*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*isotope_dict["rn222"]["decay_constant"]**2*(n214bi0 - (-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)))*(n214pb0 + n218po0 + n222rn0)) + (np.exp(isotope_dict["bi214"]["decay_constant"]*t) - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)))*isotope_dict["po218"]["decay_constant"]**2*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*isotope_dict["rn222"]["decay_constant"]**2*r + isotope_dict["pb214"]["decay_constant"]**2*((np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)) - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*isotope_dict["po218"]["decay_constant"]**2*isotope_dict["rn222"]["decay_constant"]**2*n218po0 - isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]**3*(n214bi0 + n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))*n214pb0 - (-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*(n218po0 + n222rn0)) + (np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*isotope_dict["rn222"]["decay_constant"]**3*r + isotope_dict["po218"]["decay_constant"]**3*(isotope_dict["rn222"]["decay_constant"]*(n214bi0 + n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))*n214pb0 + n218po0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))*n218po0 + n222rn0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t))*n222rn0) + (-np.exp(isotope_dict["bi214"]["decay_constant"]*t) + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t)))*r)) + isotope_dict["pb214"]["decay_constant"]**3*(isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]**2*(n214bi0 + n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))*n214pb0 - (-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*(n218po0 + n222rn0)) - (np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*isotope_dict["rn222"]["decay_constant"]**2*r - isotope_dict["po218"]["decay_constant"]**2*(isotope_dict["rn222"]["decay_constant"]*(n214bi0 + n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))*n214pb0 + n218po0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t))*n218po0 + n222rn0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t))*n222rn0) + (-np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t)))*r))) + isotope_dict["bi214"]["decay_constant"]**3*((-isotope_dict["pb214"]["decay_constant"]**3)*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*(n214bi0 + n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))*n214pb0) + isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*(-isotope_dict["po218"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"]*n214bi0 + isotope_dict["rn222"]["decay_constant"]*n214bi0 + (-np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)))*r) + isotope_dict["pb214"]["decay_constant"]**2*(isotope_dict["po218"]["decay_constant"]**2*(n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))*n214pb0 + (-np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)) + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*n218po0) + isotope_dict["po218"]["decay_constant"]*(np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))*isotope_dict["rn222"]["decay_constant"]*n218po0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t))*isotope_dict["rn222"]["decay_constant"]*(n218po0 + n222rn0) + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t))*(isotope_dict["rn222"]["decay_constant"]*n222rn0 - r) + np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t))*r) + isotope_dict["rn222"]["decay_constant"]*((-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)))*isotope_dict["rn222"]["decay_constant"]*n214pb0 + (-np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*r)) + isotope_dict["pb214"]["decay_constant"]*(isotope_dict["po218"]["decay_constant"]**3*n214bi0 - isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]**2*((-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)))*n214pb0 + (np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)) - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*(n218po0 + n222rn0)) - isotope_dict["rn222"]["decay_constant"]**2*(isotope_dict["rn222"]["decay_constant"]*n214bi0 + (-np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*r) + isotope_dict["po218"]["decay_constant"]**2*(isotope_dict["rn222"]["decay_constant"]*((-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)))*n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t))*n218po0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t))*n222rn0 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))*(n218po0 + n222rn0)) + (-np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t)))*r))))/np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t))/(isotope_dict["bi214"]["decay_constant"]*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])))
+        return isotope_dict["bi214"]["decay_constant"] *((isotope_dict["bi214"]["decay_constant"]**4*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])
+*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*n214bi0 
++ (-1 + np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)))*isotope_dict["pb214"]["decay_constant"]*(isotope_dict["pb214"]["decay_constant"] 
+- isotope_dict["po218"]["decay_constant"])*isotope_dict["po218"]["decay_constant"]*(isotope_dict["pb214"]["decay_constant"] 
+- isotope_dict["rn222"]["decay_constant"])*isotope_dict["rn222"]["decay_constant"]*(-isotope_dict["po218"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])*r 
++ isotope_dict["bi214"]["decay_constant"]**2*((-isotope_dict["pb214"]["decay_constant"]**2)*(isotope_dict["po218"]["decay_constant"] 
+- isotope_dict["rn222"]["decay_constant"])*(isotope_dict["rn222"]["decay_constant"]**2*(n214bi0 + n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["pb214"]["decay_constant"])*t))*n214pb0) + isotope_dict["po218"]["decay_constant"]**2*(n214bi0 - (-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["pb214"]["decay_constant"])*t)))*(n214pb0 + n218po0)) + isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*(n214bi0 
+- (-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)))*(2*n214pb0 + n218po0))) 
++ isotope_dict["po218"]["decay_constant"]*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*isotope_dict["rn222"]["decay_constant"]
+*(isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*n214bi0 + (-np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) 
++ np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)))*isotope_dict["po218"]["decay_constant"]*r 
++ (-np.exp(isotope_dict["bi214"]["decay_constant"]*t) + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)))
+*isotope_dict["rn222"]["decay_constant"]*r) + isotope_dict["pb214"]["decay_constant"]*((-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["po218"]["decay_constant"])*t)))*isotope_dict["po218"]["decay_constant"]**2*isotope_dict["rn222"]["decay_constant"]**2*n218po0 
++ isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]**3*((-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["pb214"]["decay_constant"])*t)))*n214pb0 + (np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)) 
+- np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*(n218po0 + n222rn0)) 
+- (np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["po218"]["decay_constant"])*t)))*isotope_dict["rn222"]["decay_constant"]**3*r + isotope_dict["po218"]["decay_constant"]**3*(isotope_dict["rn222"]["decay_constant"]
+*(n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))*n214pb0 + n218po0 
+- np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))*n218po0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["pb214"]["decay_constant"])*t))*n222rn0 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t))*n222rn0) 
++ (np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t)))*r)) 
++ isotope_dict["pb214"]["decay_constant"]**3*(isotope_dict["po218"]["decay_constant"]**2*(n214bi0 + n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["pb214"]["decay_constant"])*t))*n214pb0 + n218po0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t))*n218po0) 
+- isotope_dict["rn222"]["decay_constant"]*(isotope_dict["rn222"]["decay_constant"]*(n214bi0 + n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["pb214"]["decay_constant"])*t))*n214pb0) + (-np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["po218"]["decay_constant"])*t)))*r) + isotope_dict["po218"]["decay_constant"]*((-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["po218"]["decay_constant"])*t)))*isotope_dict["rn222"]["decay_constant"]*n218po0 + (np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["po218"]["decay_constant"])*t)) - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["rn222"]["decay_constant"])*t)))*isotope_dict["rn222"]["decay_constant"]*n222rn0 + (-np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) 
++ np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t)))*r))) + isotope_dict["bi214"]["decay_constant"]
+*((-isotope_dict["pb214"]["decay_constant"])*isotope_dict["po218"]["decay_constant"]**2*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])
+*isotope_dict["rn222"]["decay_constant"]**2*(n214bi0 - (-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)))
+*(n214pb0 + n218po0 + n222rn0)) + (np.exp(isotope_dict["bi214"]["decay_constant"]*t) - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["pb214"]["decay_constant"])*t)))*isotope_dict["po218"]["decay_constant"]**2*(isotope_dict["po218"]["decay_constant"] 
+- isotope_dict["rn222"]["decay_constant"])*isotope_dict["rn222"]["decay_constant"]**2*r + isotope_dict["pb214"]["decay_constant"]**2
+*((np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)) - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["po218"]["decay_constant"])*t)))*isotope_dict["po218"]["decay_constant"]**2*isotope_dict["rn222"]["decay_constant"]**2*n218po0 - isotope_dict["po218"]["decay_constant"]
+*isotope_dict["rn222"]["decay_constant"]**3*(n214bi0 + n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))*n214pb0 
+- (-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*(n218po0 + n222rn0)) 
++ (np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["po218"]["decay_constant"])*t)))*isotope_dict["rn222"]["decay_constant"]**3*r + isotope_dict["po218"]["decay_constant"]**3
+*(isotope_dict["rn222"]["decay_constant"]*(n214bi0 + n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["pb214"]["decay_constant"])*t))*n214pb0 + n218po0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))
+*n218po0 + n222rn0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t))*n222rn0) 
++ (-np.exp(isotope_dict["bi214"]["decay_constant"]*t) + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["rn222"]["decay_constant"])*t)))*r)) + isotope_dict["pb214"]["decay_constant"]**3*(isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]**2
+*(n214bi0 + n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))*n214pb0 
+- (-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*(n218po0 + n222rn0)) 
+- (np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["po218"]["decay_constant"])*t)))*isotope_dict["rn222"]["decay_constant"]**2*r - isotope_dict["po218"]["decay_constant"]**2
+*(isotope_dict["rn222"]["decay_constant"]*(n214bi0 + n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["pb214"]["decay_constant"])*t))*n214pb0 + n218po0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t))
+*n218po0 + n222rn0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t))*n222rn0) 
++ (-np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["rn222"]["decay_constant"])*t)))*r))) + isotope_dict["bi214"]["decay_constant"]**3*((-isotope_dict["pb214"]["decay_constant"]**3)
+*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*(n214bi0 + n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["pb214"]["decay_constant"])*t))*n214pb0) + isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*(-isotope_dict["po218"]["decay_constant"] 
++ isotope_dict["rn222"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"]*n214bi0 + isotope_dict["rn222"]["decay_constant"]*n214bi0 
++ (-np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)))*r) 
++ isotope_dict["pb214"]["decay_constant"]**2*(isotope_dict["po218"]["decay_constant"]**2*(n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["pb214"]["decay_constant"])*t))*n214pb0 + (-np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)) 
++ np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*n218po0) + isotope_dict["po218"]["decay_constant"]
+*(np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t))*isotope_dict["rn222"]["decay_constant"]*n218po0 
+- np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t))*isotope_dict["rn222"]["decay_constant"]*(n218po0 + n222rn0) 
++ np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t))*(isotope_dict["rn222"]["decay_constant"]*n222rn0 - r) 
++ np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t))*r) + isotope_dict["rn222"]["decay_constant"]*((-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["pb214"]["decay_constant"])*t)))*isotope_dict["rn222"]["decay_constant"]*n214pb0 + (-np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) 
++ np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*r)) + isotope_dict["pb214"]["decay_constant"]
+*(isotope_dict["po218"]["decay_constant"]**3*n214bi0 - isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]**2
+*((-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)))*n214pb0 
++ (np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*t)) - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["po218"]["decay_constant"])*t)))*(n218po0 + n222rn0)) - isotope_dict["rn222"]["decay_constant"]**2*(isotope_dict["rn222"]["decay_constant"]*n214bi0 
++ (-np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*r) 
++ isotope_dict["po218"]["decay_constant"]**2*(isotope_dict["rn222"]["decay_constant"]*((-1 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["pb214"]["decay_constant"])*t)))*n214pb0 - np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t))*n218po0 
+- np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t))*n222rn0 + np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["pb214"]["decay_constant"])*t))*(n218po0 + n222rn0)) + (-np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)) 
++ np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] 
+- isotope_dict["rn222"]["decay_constant"])*t)))*r))))/np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t))/(isotope_dict["bi214"]["decay_constant"]
+*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])
+*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])
+*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])))
 
 
 # This function is used to extract the 'peak_data_dict' from 'raw_data' and 'measurement_data'.
