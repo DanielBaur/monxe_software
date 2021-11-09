@@ -1306,6 +1306,140 @@ def draw_capacitor(
     return
 
 
+# This function is used to draw a pin connector onto a plot
+def draw_pin(
+    ax,
+    pos,
+    width,
+    height,
+    diagonal_width_rel = 0.8,
+    linewidth = 1,
+    linecolor = "black",
+    fillcolor = "white",
+    zorder = 1,
+    layout = ["inout", "out", "in", "none"][0],
+):
+    # inferring vertices
+    left_center = vs(pos, [-0.5*width, 0])
+    left_top = vs(left_center, [0, 0.5*height])
+    left_top_recessed = vs(left_top, [+diagonal_width_rel, 0])
+    left_bot = vs(left_center, [0, -0.5*height])
+    left_bot_recessed = vs(left_bot, [+diagonal_width_rel, 0])
+    right_center = vs(pos, [+0.5*width, 0])
+    right_top = vs(right_center, [0, 0.5*height])
+    right_top_recessed = vs(right_top, [-diagonal_width_rel, 0])
+    right_bot = vs(right_center, [0, -0.5*height])
+    right_bot_recessed = vs(right_bot, [-diagonal_width_rel, 0])
+    # inferring orientation
+    if layout == "inout":
+        polygon_array = [left_center, left_top_recessed, right_top_recessed, right_center, right_bot_recessed, left_bot_recessed]
+    elif layout == "none":
+        polygon_array = [left_top, right_top, right_bot, left_bot]
+    elif layout == "in":
+        polygon_array = [left_top, right_top_recessed, right_center, right_bot_recessed, left_bot]
+    elif layout == "out":
+        polygon_array = [left_center, left_top_recessed, right_top, right_bot, left_bot_recessed]
+    # drawing polygon
+    pin_poly = patches.Polygon(
+        xy = polygon_array,
+        linewidth = linewidth,
+        edgecolor = linecolor,
+        facecolor = fillcolor,
+        zorder = zorder,
+        closed = True)
+    ax.add_patch(pin_poly)
+    return
+
+
+# This function is used to draw an amplifier triangle
+def draw_amplifier(
+    ax,
+    pos,
+    width,
+    height,
+    inoutpindist,
+    linewidth = 1,
+    linecolor = "black",
+    fillcolor = "white",
+    pin_linewidth = 1,
+    pin_in_upper_pos = [],
+    pin_in_lower_pos = [],
+    pin_out_pos = [],
+    pin_vin_upper_pos = [],
+    pin_vin_lower_pos = [],
+    zorder = 1, 
+    label_xoffset_rel = 0.2,
+    width_vsupply_rel = 0.3,
+    label_yoffset_rel_vsupply = 0.09,
+    label_fontsize = 11):
+
+    # vertices
+    a = vs(pos, [-0.5*width, 0])
+    pin_upper = vs(a, [0, +0.5*inoutpindist])
+    corner_upper_left = vs(a, [0, +0.5*height])
+    corner_right = vs(pos, [0.5*width, 0])
+    corner_lower_left = vs(a, [0, -0.5*height])
+    pin_lower = vs(a, [0, -0.5*inoutpindist])
+    # drawing the amplifier triangle
+    amp_poly = patches.Polygon(
+        xy = [a, corner_upper_left, corner_right, corner_lower_left],
+        linewidth = linewidth,
+        edgecolor = "black",
+        facecolor = fillcolor,
+        zorder = zorder,
+        closed = True)
+    ax.add_patch(amp_poly)
+    # marking inverting and non-inverting input
+    for input_pin_pos in [pin_upper, pin_lower]:
+        if input_pin_pos != []:
+            ax.text(
+                s = r"$+$" if input_pin_pos == pin_lower else r"$-$",
+                x = input_pin_pos[0] +label_xoffset_rel*width,
+                y = input_pin_pos[1],
+                fontsize = label_fontsize,
+                color = "black",
+                horizontalalignment = "center",
+                verticalalignment = "center")            
+    # drawing the amplifier connections
+    amplifier_connections_list = []
+    if pin_in_upper_pos != []:
+        amplifier_connections_list.append([pin_upper, pin_in_upper_pos])
+    if pin_in_lower_pos != []:
+        amplifier_connections_list.append([pin_lower, pin_in_lower_pos])
+    if pin_out_pos != []:
+        amplifier_connections_list.append([pos, pin_out_pos])
+    if pin_vin_upper_pos != []:
+        amplifier_connections_list.append([pos, pin_vin_upper_pos])
+    if pin_vin_lower_pos != []:
+        amplifier_connections_list.append([pos, pin_vin_lower_pos])
+    for amp_con in amplifier_connections_list:
+        ax.plot(
+            [amp_con[0][0],amp_con[1][0]],
+            [amp_con[0][1],amp_con[1][1]],
+            color = linecolor,
+            linewidth = pin_linewidth,
+            zorder = zorder-1)
+    # labelling the supply voltage
+    for input_pin_pos in [pin_vin_upper_pos, pin_vin_lower_pos]:
+        if input_pin_pos != []:
+            ax.plot(
+                [input_pin_pos[0]-0.5*width_vsupply_rel*width, input_pin_pos[0]+0.5*width_vsupply_rel*width],
+                [input_pin_pos[1], input_pin_pos[1]],
+                color = linecolor,
+                linewidth = linewidth,
+                zorder = zorder)
+            ax.text(
+                s = r"$V_{\mathrm{cc}}$" if input_pin_pos == pin_vin_upper_pos else r"$V_{\mathrm{ee}}$",
+                x = input_pin_pos[0],
+                y = input_pin_pos[1] +label_yoffset_rel_vsupply*height if input_pin_pos == pin_vin_upper_pos else input_pin_pos[1] -label_yoffset_rel_vsupply*height,
+                fontsize = label_fontsize,
+                color = "black",
+                horizontalalignment = "center",
+                verticalalignment = "center")            
+    return
+
+
+
 
 
 #######################################
