@@ -44,9 +44,13 @@ import matplotlib.image as mpimg
 from matplotlib.offsetbox import TextArea, DrawingArea, OffsetImage, AnnotationBbox
 import getpass
 import json
+from scipy import stats
 from scipy.stats import chi2 # for "Fabian's calculation" of the Poissonian Error
 import scipy.integrate as integrate
+from scipy.integrate import quad
+from scipy.stats import chi2
 import subprocess
+import copy
 
 # including the 'monxe_software' libraries 'monxeana' and 'miscfig'
 import sys
@@ -77,7 +81,7 @@ abspath_measurements = abspath_monxe +"measurements/"
 relpath_data_compass = "./DAQ/run/RAW/" # this is the folder where CoMPASS stores the measurement data
 abspath_monxe_measurements_external = "/media/daniel/2_intenso_256gb_stick/monxe_measurements/"
 abspath_mastertalk_images = "/home/daniel/Desktop/arbeitsstuff/mastertalk/images/"
-abspath_thesis = "/home/daniel/Desktop/thesis/"
+abspath_thesis = "/home/daniel/Desktop/arbeitsstuff/thesis/"
 abspath_thesis_monxe_images =  abspath_thesis +"rec/"
 
 
@@ -157,7 +161,8 @@ isotope_dict = {
         "q_value_kev" : 5590.3,
         "alpha_energy_kev" : 5489.48,
         "decay_constant" : np.log(2)/(3.8232 *24 *60 *60),
-        "color" : color_monxe_cyan,
+        #"color" : color_monxe_cyan,
+        "color" : miscfig.colorstring_citirok1,
         "latex_label" : r"$^{222}\,\mathrm{Rn}$",
     },
     # polonium
@@ -271,6 +276,104 @@ def mod_datetimestring(input_string):
     return d +r"/" +m +r"/" +y +r" " +H +r":" +M +r":" +S
 
 
+def error_propagation_for_one_dimensional_function(
+    f,
+    x_mean,
+    x_lower,
+    x_upper,
+    param_dict = {},
+    n_mc = 10**6,
+    n_histogram_bins = 200,
+    flag_verbose = False,
+):
+    """
+    idea:
+        This function is used to calculate the error propagation for a one dimensional real function.
+        Therefore MC data is generated according to the (potentially asymmetric) input distribution.
+        This simulation dataset is approximated by a Gaussian distribution with 'n_mc'/2-many events simulated for the lower and upper error intervals, respectively.
+        Afterward, for every simulated x-value the corresponding y-value is computed according to function 'f'.
+        Finally, The left- and right-sided 32% interval of the y-data array is computed and returned as output.
+    inputs:
+        f: function to compute the error propagation for
+        param_dict: dictionary, parameters passed on to above function, f(x,**param_dict)
+        x_mean: float,
+        x_lower: float, left-sided 34% error interval
+        x_upper: float, right-sided 34% error interval
+        n_mc: int divisible by 2, size of the MC population
+    returns:
+        y_mean: float, f(x)
+        y_lower: float, -34% error interval left of f(x)
+        y_upper: float, +34% error interval right of f(x)
+    """
+    
+    # generating MC data by separately generating n_mc/2-many left- and right-sided Gaussian-distributed events
+    x_data_mc = []
+    rng = np.random.default_rng(seed=42)
+    while len(x_data_mc) < n_mc/2:
+        left_sided_data_point = rng.normal(x_mean, x_lower, 1)[0]
+        if left_sided_data_point <= x_mean:
+            x_data_mc.append(left_sided_data_point)
+    while len(x_data_mc) < n_mc:
+        right_sided_data_point = rng.normal(x_mean, x_upper, 1)[0]
+        if right_sided_data_point >= x_mean:
+            x_data_mc.append(right_sided_data_point)
+    plt.hist(x_data_mc)
+    plt.show()
+    
+    # computing the function output values for every simulated
+    y_data_computed = []
+    y_mean = f(x_mean, **param_dict)
+    for x_val in x_data_mc:
+        y_val = f(x_val, **param_dict)
+        y_data_computed.append(y_val)
+    plt.hist(y_data_computed)
+    plt.show()
+        
+    # determining the left- and right-sided widths of the distribution
+    y_data_counts, y_data_bin_edges = np.histogram(a=y_data_computed, bins=n_histogram_bins)
+    y_data_bin_centers = [edge +0.5*(y_data_bin_edges[2]-y_data_bin_edges[1]) for edge in y_data_bin_edges[:-1]]
+    y_center, y_lower, y_upper = get_asymmetric_intervals_around_center_val_for_interpolated_discrete_distribution(
+        distribution_bin_centers = y_data_bin_centers,
+        distribution_counts = y_data_counts,
+        distribution_center_value = y_mean,
+        interval_width_lower_percent = 0.6827/2,
+        interval_width_upper_percent = 0.6827/2,
+        ctr_max = 10**6,
+        granularity = 100,
+        flag_verbose = flag_verbose)
+    
+    return y_mean, y_lower, y_upper
+
+
+def calc_reduced_chi_square(
+    y_data_obs, # array, observed values
+    y_data_exp, # array, expected (i.e., fit) values
+    y_data_err, # array, errors of observed values
+    ddof, # integer, nu = n -m, n being len(y_data_obs) and m being the number of fitted parameters
+    y_data_err_lower = [], # array, lower errors of observed values
+    y_data_err_upper = [], # array, upper errors of observed values
+):
+    """
+    https://www.astroml.org/book_figures/chapter4/fig_chi2_eval.html
+    https://en.wikipedia.org/wiki/Reduced_chi-squared_statistic
+    """
+
+    # calculating the mean errors if asymmetric ones are given
+    if y_data_err == []:
+        y_errors = [0.5*(y_data_err_lower[i] +y_data_err_upper[i]) for i in range(len(y_data_obs))]
+    else:
+        y_errors = y_data_err
+
+    # calculating the reduced chi-square test statistic
+    red_chi_square = 0
+    for i, y_val in enumerate(y_data_obs):
+        red_chi_square += ((y_data_obs[i]-y_data_exp[i])/(y_errors[i]))**2
+    nu = len(y_data_obs)-ddof
+    red_chi_square = red_chi_square/nu
+
+    return red_chi_square
+
+
 # This function is used to convert a datetime string (as defined by datetime, e.g. '31-07-20 15:31:25') into a datetime object.
 def convert_string_to_datetime_object(datetime_str):
     datetime_obj = datetime.datetime.strptime(datetime_str, '%d/%m/%y %H:%M:%S')
@@ -352,6 +455,18 @@ def function_linear_vec(x, m, t):
         return m*x +t
 
 
+# This function is used to correct an inferred activity measurement for the (separately determined) detection efficiency.
+def error_propagation_a_dividedby_b(
+    a,
+    a_error,
+    b,
+    b_error,
+):
+    res = (1/b) *a
+    res_error = np.sqrt((a_error/b)**2 +((a*b_error)/(b**2))**2)
+    return res, res_error
+
+
 # This function is used to extrapolate the exponential decay/rise in radon activity.
 # asymptotic exponential rise: a(t) = a_ema *(1-exp(-lambda_222rn*dt))
 # exponential decay: a(t) = a_t_0 *exp(-lambda_222rn*dt)
@@ -405,6 +520,7 @@ def update_and_save_measurement_data(
         measurement_data_dict = get_dict_from_json(input_pathstring_json_file=abspath_measurement_data_dict)
     except:
         measurement_data_dict = {}
+        print(f"update_and_save_measurement_data(): generated new and empty 'measurement_data_dict'")
 
     # updating and saving the 'measurement_data' dict
     measurement_data_dict.update(update_dict)
@@ -627,8 +743,9 @@ def get_measurement_duration(
 def plot_mca_waveform(
     wfm_x_data,
     wfm_y_data,
-    plot_xlabel = r"$\Delta t \, $/$ \,\mathrm{\mu s}$",
-    plot_ylabel = r"$\Delta U\, $/$ \,\mathrm{V}$",
+    plot_xlabel = r"record time  / $\mathrm{\mu s}$",
+    plot_ylabel = r"$U_{\mathrm{sig}}^{\mathrm{MCA}}(t)$ / $\mathrm{adc\,\,channels}$",
+    plot_ylabel_voltageaxis = r"$U_{\mathrm{sig}}^{\mathrm{MCA}}(t)$ / $\mathrm{V}$",
     plot_linewidth = 0.5,
     plot_linecolor = miscfig.uni_blue,
     plot_x_lim = [0, 1, "rel"], # x-axis boundaries, relative to 'wfm_x_data' min and max
@@ -637,6 +754,7 @@ def plot_mca_waveform(
     plot_aspect_ratio = 9/16,
     plot_figsize_x_inch = miscfig.standard_figsize_x_inch,
     flag_output_abspath_list = False,
+    flag_show_voltage_axis = False,
     flag_show = True,
     flag_comments_list = False,
     comments_textcolor = "black",
@@ -674,6 +792,14 @@ def plot_mca_waveform(
             comment_linesep = comments_linesep,
             comment_fontsize = comments_fontsize,
             flag_alignment = ["top_to_bottom", "symmetric"])
+    # voltage axis
+    if flag_show_voltage_axis == True:
+        ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
+        ax2.set_ylabel(plot_ylabel_voltageaxis, fontsize=plot_labelfontsize, labelpad=5)
+        #divr_v = [0,1]
+        #y2_lim = [divr_v[0]*plot_y_lim[], divr_v[1]*] if plot_y_lim[3]=="rel" else 
+        ax2.set_ylim([0,1])
+        #ax2.tick_params(axis='y', labelcolor=color)
     # saving
     if flag_show:
         plt.show()
@@ -1172,6 +1298,7 @@ def plot_mca_spectrum(
     flag_errors = [False, "poissonian"][0],
     flag_plot_fits = [], # list of fits to be plotted, given in peak numbers
     flag_preliminary = [False, True][0],
+    flag_show_isotope_windows = [False,True][1],
 ):
 
     # canvas
@@ -1181,7 +1308,7 @@ def plot_mca_spectrum(
     data_histogram = get_histogram_data_from_timestamp_data(timestamp_data=raw_data_ndarray, histval="pulse_height_adc")
     x_data = data_histogram["bin_centers"]
     y_data = data_histogram["counts"]
-    if flag_plot_histogram_data_from == ["spectrum_data"]:
+    if flag_plot_histogram_data_from == "spectrum_data":
         x_data_adc = [float(entry) for entry in measurement_data_dict["spectrum_data_output"]["histogram"]["bin_centers_adc"]]
         x_data = [float(entry) for entry in measurement_data_dict["spectrum_data_output"]["histogram"]["bin_centers_adc"]]
         y_data = [float(entry) for entry in measurement_data_dict["spectrum_data_output"]["histogram"]["counts"]]
@@ -1282,16 +1409,16 @@ def plot_mca_spectrum(
 #    #    color = 'grey',
 #    #    zorder = -50)
 #    # shading the isotope windows (i.e., the extracted counts)
-#    if "activity_data" in [*measurement_data_dict] and flag_show_isotope_windows == True:
-#        for peaknum in known_peaks:
-#            isotope_window_adcc = measurement_data_dict["activity_data"]["decay_model_fit_results"][measurement_data_dict["spectrum_data_input"][peaknum]["a_priori"]["isotope"]]["window_adcc"]
-#            ax1.axvspan(
-#                isotope_window_adcc[0] if flag_x_axis_units == "adc_channels" else energy_channel_relation(isotope_window_adcc[0], *p_opt),
-#                isotope_window_adcc[1] if flag_x_axis_units == "adc_channels" else energy_channel_relation(isotope_window_adcc[1], *p_opt),
-#                alpha = 0.5,
-#                linewidth = 0,
-#                color = isotope_dict[measurement_data_dict["spectrum_data_input"][peaknum]["a_priori"]["isotope"]]["color"],
-#                zorder = -50)
+    if "activity_data_output" in [*measurement_data_dict] and flag_show_isotope_windows == True:
+        for peak in ["po218", "po214"]:
+            isotope_window_adcc = measurement_data_dict["activity_data_output"]["event_extraction"][peak +"_adcc_window"]
+            ax1.axvspan(
+                isotope_window_adcc[0] if flag_x_axis_units == "adc_channels" else function_linear_vec(x=[isotope_window_adcc[0]], m=measurement_data_dict["spectrum_data_output"]["energy_channel_relation_fit"]["fit_data"]["m"], t=measurement_data_dict["spectrum_data_output"]["energy_channel_relation_fit"]["fit_data"]["t"])[0],
+                isotope_window_adcc[1] if flag_x_axis_units == "adc_channels" else function_linear_vec(x=[isotope_window_adcc[1]], m=measurement_data_dict["spectrum_data_output"]["energy_channel_relation_fit"]["fit_data"]["m"], t=measurement_data_dict["spectrum_data_output"]["energy_channel_relation_fit"]["fit_data"]["t"])[0],
+                alpha = 0.5,
+                linewidth = 0,
+                color = isotope_dict[peak]["color"],
+                zorder = -50)
 #    # measurement comments
 #    #monxeana.annotate_comments(
 #    #    comment_ax = ax1,
@@ -1427,12 +1554,495 @@ def annotate_comments(
             color = comment_textcolor if type(comment_textcolor)==str else comment_textcolor[i],
             rotation = 0,
             horizontalalignment = "left" if comment_textpos[0] < 0.5 else "right",
-            verticalalignment = "center",
+            verticalalignment = "bottom" if comment_textpos[1] < 0.5 else "top",
             transform = comment_ax.transAxes
         )
         ctr_textpos += 1
 
     return
+
+
+# This function is used to extract the 'activity_data_dict' from 'raw_data' and 'measurement_data'.
+def get_activity_data_output_dict(
+    measurement_data_dict,
+    raw_data_ndarray,
+):
+
+    ### profile: 'polonium_activity_fit'
+    if measurement_data_dict["activity_data_input"]["flag_activity_data"] == "polonium_activity_fit":
+
+        # analysis preparation
+        timestamp_edges_ps = [0]
+        timestamp_ctr = 1
+        if measurement_data_dict["activity_data_input"]["flag_t_meas_ana_s"] == "delta_t_meas":
+            t_max_ps = max(raw_data_ndarray["timestamp_ps"])
+        elif measurement_data_dict["activity_data_input"]["flag_t_meas_ana_s"] != "delta_t_meas":
+            t_max_ps = measurement_data_dict["activity_data_input"]["flag_t_meas_ana_s"] *(10**12)
+        while timestamp_edges_ps[len(timestamp_edges_ps)-1] +measurement_data_dict["activity_data_input"]["activity_interval_ps"] < t_max_ps:
+            timestamp_edges_ps.append(measurement_data_dict["activity_data_input"]["activity_interval_ps"]*timestamp_ctr)
+            timestamp_ctr += 1
+        timestamp_centers_ps = [i +0.5*measurement_data_dict["activity_data_input"]["activity_interval_ps"] for i in timestamp_edges_ps[:-1]]
+        timestamp_centers_seconds = [i/(1000**4) for i in timestamp_centers_ps]
+
+        # extracting the detected counts per time bin
+        decays_per_activity_interval_po218 = []
+        decays_per_activity_interval_po214 = []
+        decays_per_activity_interval_po218_errors_lower = []
+        decays_per_activity_interval_po214_errors_lower = []
+        decays_per_activity_interval_po218_errors_upper = []
+        decays_per_activity_interval_po214_errors_upper = []
+
+        # determining the adcc selection windows for the individual peaks
+        if measurement_data_dict["activity_data_input"]["flag_calibration"] not in ["self_absolute_adcc", "self_relative_adcc", "self_relative_sigma"]:
+            print(f"include calibration by external file here")
+        else:
+            po218_peaknum = [keynum for keynum in [*measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"]] if measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"][keynum]=="po218"][0]
+            po214_peaknum = [keynum for keynum in [*measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"]] if measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"][keynum]=="po214"][0]
+            if measurement_data_dict["activity_data_input"]["flag_calibration"] == "self_absolute_adcc":
+                adcc_selection_window_po218_left = measurement_data_dict["activity_data_input"]["po218_window"][0]
+                adcc_selection_window_po218_right = measurement_data_dict["activity_data_input"]["po218_window"][1]
+                adcc_selection_window_po214_left = measurement_data_dict["activity_data_input"]["po214_window"][0]
+                adcc_selection_window_po214_right = measurement_data_dict["activity_data_input"]["po214_window"][1]
+            elif measurement_data_dict["activity_data_input"]["flag_calibration"] == "self_relative_adcc":
+                adcc_selection_window_po218_left = measurement_data_dict["spectrum_data_output"]["peak_fits"][po218_peaknum]["fit_data"]["mu"] -measurement_data_dict["activity_data_input"]["po218_window"][0]
+                adcc_selection_window_po218_right = measurement_data_dict["spectrum_data_output"]["peak_fits"][po218_peaknum]["fit_data"]["mu"] +measurement_data_dict["activity_data_input"]["po218_window"][1]
+                adcc_selection_window_po214_left = measurement_data_dict["spectrum_data_output"]["peak_fits"][po214_peaknum]["fit_data"]["mu"] -measurement_data_dict["activity_data_input"]["po214_window"][0]
+                adcc_selection_window_po214_right = measurement_data_dict["spectrum_data_output"]["peak_fits"][po214_peaknum]["fit_data"]["mu"] +measurement_data_dict["activity_data_input"]["po214_window"][1]
+            elif measurement_data_dict["activity_data_input"]["flag_calibration"] == "self_relative_sigma":
+                adcc_selection_window_po218_left = measurement_data_dict["spectrum_data_output"]["peak_fits"][po218_peaknum]["fit_data"]["mu"] -(measurement_data_dict["activity_data_input"]["po218_window"][0] *measurement_data_dict["spectrum_data_output"]["peak_fits"][po218_peaknum]["fit_data"]["sigma"])
+                adcc_selection_window_po218_right = measurement_data_dict["spectrum_data_output"]["peak_fits"][po218_peaknum]["fit_data"]["mu"] +(measurement_data_dict["activity_data_input"]["po218_window"][1] *measurement_data_dict["spectrum_data_output"]["peak_fits"][po218_peaknum]["fit_data"]["sigma"])
+                adcc_selection_window_po214_left = measurement_data_dict["spectrum_data_output"]["peak_fits"][po214_peaknum]["fit_data"]["mu"] -(measurement_data_dict["activity_data_input"]["po214_window"][0] *measurement_data_dict["spectrum_data_output"]["peak_fits"][po214_peaknum]["fit_data"]["sigma"])
+                adcc_selection_window_po214_right = measurement_data_dict["spectrum_data_output"]["peak_fits"][po214_peaknum]["fit_data"]["mu"] +(measurement_data_dict["activity_data_input"]["po214_window"][1] *measurement_data_dict["spectrum_data_output"]["peak_fits"][po214_peaknum]["fit_data"]["sigma"])
+
+        # determining the detected po218 and po214 decays per 'activity_interval_ps'
+        for i in range(len(timestamp_edges_ps)-1):
+            decays_per_activity_interval_po218.append(len(raw_data_ndarray[
+                (raw_data_ndarray["timestamp_ps"] >= timestamp_edges_ps[i]) &
+                (raw_data_ndarray["timestamp_ps"] <= timestamp_edges_ps[i+1]) &
+                (raw_data_ndarray["pulse_height_adc"] >= adcc_selection_window_po218_left) &
+                (raw_data_ndarray["pulse_height_adc"] <= adcc_selection_window_po218_right)]))
+            decays_per_activity_interval_po214.append(len(raw_data_ndarray[
+                (raw_data_ndarray["timestamp_ps"] >= timestamp_edges_ps[i]) &
+                (raw_data_ndarray["timestamp_ps"] <= timestamp_edges_ps[i+1]) &
+                (raw_data_ndarray["pulse_height_adc"] >= adcc_selection_window_po214_left) &
+                (raw_data_ndarray["pulse_height_adc"] <= adcc_selection_window_po214_right)]))
+        for i in range(len(decays_per_activity_interval_po218)):
+            decays_per_activity_interval_po218_errors_lower.append(calc_poissonian_error(number_of_counts=decays_per_activity_interval_po218[i], flag_mode=measurement_data_dict["activity_data_input"]["flag_errors"])[0])
+            decays_per_activity_interval_po218_errors_upper.append(calc_poissonian_error(number_of_counts=decays_per_activity_interval_po218[i], flag_mode=measurement_data_dict["activity_data_input"]["flag_errors"])[1])
+            decays_per_activity_interval_po214_errors_lower.append(calc_poissonian_error(number_of_counts=decays_per_activity_interval_po214[i], flag_mode=measurement_data_dict["activity_data_input"]["flag_errors"])[0])
+            decays_per_activity_interval_po214_errors_upper.append(calc_poissonian_error(number_of_counts=decays_per_activity_interval_po214[i], flag_mode=measurement_data_dict["activity_data_input"]["flag_errors"])[1])
+
+        # model fit
+        if measurement_data_dict["activity_data_input"]["flag_model_fit"] == "fit_po218_and_po214_independently":
+            print(f"This still needs to be implemented")
+        elif measurement_data_dict["activity_data_input"]["flag_model_fit"] == "fit_po218_and_po214_simultaneously":
+            # defining a function that allows to simultaneously fit both the po218 and po214 activities
+            def constrained_fit_function(double_bin_centers, n222rn0, n218po0, n214pb0, n214bi0, r):
+                l = len(double_bin_centers)
+                result_1 = integral_function_po218(double_bin_centers[:l], n222rn0, n218po0, n214pb0, n214bi0, r)
+                result_2 = integral_function_po214(double_bin_centers[l:], n222rn0, n218po0, n214pb0, n214bi0, r)
+                return result_1 +result_2
+            # fitting the measured activities
+            p_opt, p_cov = curve_fit(
+                f =  constrained_fit_function,
+                xdata = timestamp_centers_seconds +timestamp_centers_seconds,
+                ydata = decays_per_activity_interval_po218 +decays_per_activity_interval_po214,
+                sigma = decays_per_activity_interval_po218_errors_upper +decays_per_activity_interval_po214_errors_upper,
+                absolute_sigma = True,
+                bounds = measurement_data_dict["activity_data_input"]["p_opt_bounds"],
+                p0 = measurement_data_dict["activity_data_input"]["p_opt_guess"])
+                #method = 'lm', # "lm" cannot handle covariance matrices with deficient rank
+            p_err = np.sqrt(np.diag(p_cov))
+            po218_n222rn0 = p_opt[0]
+            po218_n218po0 = p_opt[1]
+            po218_n214pb0 = p_opt[2]
+            po218_n214bi0 = p_opt[3]
+            po218_r = p_opt[4]
+            po218_n222rn0_error = p_err[0]
+            po218_n218po0_error = p_err[1]
+            po218_n214pb0_error = p_err[2]
+            po218_n214bi0_error = p_err[3]
+            po218_r_error = p_err[4]
+            po214_n222rn0 = p_opt[0]
+            po214_n218po0 = p_opt[1]
+            po214_n214pb0 = p_opt[2]
+            po214_n214bi0 = p_opt[3]
+            po214_r = p_opt[4]
+            po214_n222rn0_error = p_err[0]
+            po214_n218po0_error = p_err[1]
+            po214_n214pb0_error = p_err[2]
+            po214_n214bi0_error = p_err[3]
+            po214_r_error = p_err[4]
+
+        # extrapolating the equilibrium emanation activity
+        if measurement_data_dict["activity_data_input"]["flag_activity_extrapolation"] == False:
+            dt_trans = "NA"
+            dt_ema = "NA"
+            a_ema = "NA"
+            a_ema_error ="NA" 
+        elif measurement_data_dict["activity_data_input"]["flag_activity_extrapolation"] in ["default"]:
+            # retrieving the relevant times from the ELOG timestamps
+            t_ema_i = measurement_data_dict[key_measurement_information]["t_ema_i"]
+            t_trans_i = measurement_data_dict[key_measurement_information]["t_trans_i"]
+            t_meas_i = measurement_data_dict[key_measurement_information]["t_meas_i"]
+            # calculating the relevant time deltas
+            #dt_meas = (timestamp_conversion(t_meas_f)-timestamp_conversion(t_meas_i)).total_seconds()
+            dt_ema = (timestamp_conversion(t_trans_i)-timestamp_conversion(t_ema_i)).total_seconds()
+            dt_trans = (timestamp_conversion(t_meas_i)-timestamp_conversion(t_trans_i)).total_seconds()
+            # calculating the activities
+            a_t_meas_i = po214_n222rn0 *isotope_dict["rn222"]["decay_constant"]
+            a_t_meas_i_error = po214_n222rn0_error *isotope_dict["rn222"]["decay_constant"]
+            # extrapolating from 't_meas_i' to 't_trans_i'
+            a_t_trans_i, a_t_trans_i_error = extrapolate_radon_activity(
+                dt_extrapolation_s = 0,
+                known_activity_at_dt_known_bq = a_t_meas_i,
+                known_dt_s = dt_trans,
+                known_activity_error_at_dt_known_bq = a_t_meas_i_error,
+                flag_exp_rise_or_decay = ["rise", "decay"][1],
+                lambda_222rn = isotope_dict["rn222"]["decay_constant"])
+            # extrapolating from 't_trans_i' to 'inf'
+            a_ema, a_ema_error = extrapolate_radon_activity(
+                dt_extrapolation_s = "inf",
+                known_activity_at_dt_known_bq = a_t_trans_i,
+                known_dt_s = dt_ema,
+                known_activity_error_at_dt_known_bq = a_t_trans_i_error,
+                flag_exp_rise_or_decay = ["rise", "decay"][0],
+                lambda_222rn = isotope_dict["rn222"]["decay_constant"])
+
+
+        # detection efficiency correction
+        if "detection_efficiency" in [*measurement_data_dict["activity_data_input"]]:
+            a_ema, a_ema_error = error_propagation_a_dividedby_b(
+                a = a_ema,
+                a_error = a_ema_error,
+                b = measurement_data_dict["activity_data_input"]["detection_efficiency"],
+                b_error = measurement_data_dict["activity_data_input"]["detection_efficiency_error"])
+
+
+        # chi square test
+        decays_per_activity_interval_po218_expected = integral_function_po218(timestamp_centers_seconds, po218_n222rn0, po218_n218po0, po218_n214pb0, po218_n214bi0, po218_r)
+        decays_per_activity_interval_po214_expected = integral_function_po214(timestamp_centers_seconds, po214_n222rn0, po214_n218po0, po214_n214pb0, po214_n214bi0, po214_r)
+        if measurement_data_dict["activity_data_input"]["flag_calculate_chi_square"] == True:
+            chi_square, chi_square_p_value = stats.chisquare(
+                f_obs = decays_per_activity_interval_po218 +decays_per_activity_interval_po214,
+                f_exp = decays_per_activity_interval_po218_expected +decays_per_activity_interval_po214_expected,
+                ddof = 1)
+            chi_square_reduced = calc_reduced_chi_square(
+                y_data_obs = decays_per_activity_interval_po218 +decays_per_activity_interval_po214,
+                y_data_exp = decays_per_activity_interval_po218_expected +decays_per_activity_interval_po214_expected,
+                y_data_err = [],
+                ddof = 1,
+                y_data_err_lower = decays_per_activity_interval_po218_errors_lower +decays_per_activity_interval_po214_errors_lower,
+                y_data_err_upper = decays_per_activity_interval_po218_errors_upper +decays_per_activity_interval_po214_errors_upper,
+            )
+
+
+        # writing and returning the 'activity_data_dict'
+        activity_data_output_dict = {
+            "event_extraction" : {
+                "po218_adcc_window" : [adcc_selection_window_po218_left, adcc_selection_window_po218_right],
+                "po214_adcc_window" : [adcc_selection_window_po214_left, adcc_selection_window_po214_right],
+            },
+            "activity_model_fit_results" : {
+                "chi_square" : chi_square,
+                "chi_square_p_value" : chi_square_p_value,
+                "reduced_chi_square" : chi_square_reduced,
+                "po218" : {
+                    "timestamp_centers_seconds" : timestamp_centers_seconds,
+                    "decays_per_activity_interval" : decays_per_activity_interval_po218,
+                    "decays_per_activity_interval_errors_lower" : decays_per_activity_interval_po218_errors_lower,
+                    "decays_per_activity_interval_errors_upper" : decays_per_activity_interval_po218_errors_upper,
+                    "decays_per_activity_interval_expected" : decays_per_activity_interval_po218_expected,
+                    "n222rn0" : po218_n222rn0,
+                    "n218po0" : po218_n218po0,
+                    "n214pb0" : po218_n214pb0,
+                    "n214bi0" : po218_n214bi0,
+                    "r" : po218_r,
+                    "n222rn0_error" : po218_n222rn0_error,
+                    "n218po0_error" : po218_n218po0_error,
+                    "n214pb0_error" : po218_n214pb0_error,
+                    "n214bi0_error" : po218_n214bi0_error,
+                    "r_error" : po218_r_error
+                },
+                "po214" : {
+                    "timestamp_centers_seconds" : timestamp_centers_seconds,
+                    "decays_per_activity_interval" : decays_per_activity_interval_po214,
+                    "decays_per_activity_interval_errors_lower" : decays_per_activity_interval_po214_errors_lower,
+                    "decays_per_activity_interval_errors_upper" : decays_per_activity_interval_po214_errors_upper,
+                    "decays_per_activity_interval_expected" : decays_per_activity_interval_po214_expected,
+                    "n222rn0" : po214_n222rn0,
+                    "n218po0" : po214_n218po0,
+                    "n214pb0" : po214_n214pb0,
+                    "n214bi0" : po214_n214bi0,
+                    "r" : po214_r,
+                    "n222rn0_error" : po214_n222rn0_error,
+                    "n218po0_error" : po214_n218po0_error,
+                    "n214pb0_error" : po214_n214pb0_error,
+                    "n214bi0_error" : po214_n214bi0_error,
+                    "r_error" : po214_r_error
+                }
+            },
+            "activity_extrapolation" : {
+                "dt_trans_s" : dt_trans,
+                "dt_ema_s" : dt_ema,
+                "a_ema_bq" : a_ema,
+                "a_ema_error_bq" :  a_ema_error,
+            },
+        }
+
+    ### profile: 'polonium_activity_fit'
+    elif "box_counting" in measurement_data_dict["activity_data_input"]["flag_activity_data"]:
+
+        # determining the adcc selection windows for the individual peaks
+        if measurement_data_dict["activity_data_input"]["flag_calibration"] not in ["self_absolute_adcc", "self_relative_adcc", "self_relative_sigma"]:
+            print(f"include calibration by external file here")
+        else:
+            po218_peaknum = [keynum for keynum in [*measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"]] if measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"][keynum]=="po218"][0]
+            po214_peaknum = [keynum for keynum in [*measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"]] if measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"][keynum]=="po214"][0]
+            if measurement_data_dict["activity_data_input"]["flag_calibration"] == "self_absolute_adcc":
+                adcc_selection_window_po218_left = measurement_data_dict["activity_data_input"]["po218_window"][0]
+                adcc_selection_window_po218_right = measurement_data_dict["activity_data_input"]["po218_window"][1]
+                adcc_selection_window_po214_left = measurement_data_dict["activity_data_input"]["po214_window"][0]
+                adcc_selection_window_po214_right = measurement_data_dict["activity_data_input"]["po214_window"][1]
+            elif measurement_data_dict["activity_data_input"]["flag_calibration"] == "self_relative_adcc":
+                adcc_selection_window_po218_left = measurement_data_dict["spectrum_data_output"]["peak_fits"][po218_peaknum]["fit_data"]["mu"] -measurement_data_dict["activity_data_input"]["po218_window"][0]
+                adcc_selection_window_po218_right = measurement_data_dict["spectrum_data_output"]["peak_fits"][po218_peaknum]["fit_data"]["mu"] +measurement_data_dict["activity_data_input"]["po218_window"][1]
+                adcc_selection_window_po214_left = measurement_data_dict["spectrum_data_output"]["peak_fits"][po214_peaknum]["fit_data"]["mu"] -measurement_data_dict["activity_data_input"]["po214_window"][0]
+                adcc_selection_window_po214_right = measurement_data_dict["spectrum_data_output"]["peak_fits"][po214_peaknum]["fit_data"]["mu"] +measurement_data_dict["activity_data_input"]["po214_window"][1]
+            elif measurement_data_dict["activity_data_input"]["flag_calibration"] == "self_relative_sigma":
+                adcc_selection_window_po218_left = measurement_data_dict["spectrum_data_output"]["peak_fits"][po218_peaknum]["fit_data"]["mu"] -(measurement_data_dict["activity_data_input"]["po218_window"][0] *measurement_data_dict["spectrum_data_output"]["peak_fits"][po218_peaknum]["fit_data"]["sigma"])
+                adcc_selection_window_po218_right = measurement_data_dict["spectrum_data_output"]["peak_fits"][po218_peaknum]["fit_data"]["mu"] +(measurement_data_dict["activity_data_input"]["po218_window"][1] *measurement_data_dict["spectrum_data_output"]["peak_fits"][po218_peaknum]["fit_data"]["sigma"])
+                adcc_selection_window_po214_left = measurement_data_dict["spectrum_data_output"]["peak_fits"][po214_peaknum]["fit_data"]["mu"] -(measurement_data_dict["activity_data_input"]["po214_window"][0] *measurement_data_dict["spectrum_data_output"]["peak_fits"][po214_peaknum]["fit_data"]["sigma"])
+                adcc_selection_window_po214_right = measurement_data_dict["spectrum_data_output"]["peak_fits"][po214_peaknum]["fit_data"]["mu"] +(measurement_data_dict["activity_data_input"]["po214_window"][1] *measurement_data_dict["spectrum_data_output"]["peak_fits"][po214_peaknum]["fit_data"]["sigma"])
+
+        # determining the detected po218 and po214 decays within the measurement time
+        if measurement_data_dict["activity_data_input"]["flag_t_meas_ana_s"] == "delta_t_meas":
+            t_max_ps = max(raw_data_ndarray["timestamp_ps"])
+        elif measurement_data_dict["activity_data_input"]["flag_t_meas_ana_s"] != "delta_t_meas":
+            t_max_ps = measurement_data_dict["activity_data_input"]["flag_t_meas_ana_s"] *(10**12)
+        time_window_ps = [0,t_max_ps]
+        n_meas_po218 = len(raw_data_ndarray[
+            (raw_data_ndarray["timestamp_ps"] >= time_window_ps[0]) &
+            (raw_data_ndarray["timestamp_ps"] <= time_window_ps[1]) &
+            (raw_data_ndarray["pulse_height_adc"] >= adcc_selection_window_po218_left) &
+            (raw_data_ndarray["pulse_height_adc"] <= adcc_selection_window_po218_right)])
+        n_meas_po214 = len(raw_data_ndarray[
+            (raw_data_ndarray["timestamp_ps"] >= time_window_ps[0]) &
+            (raw_data_ndarray["timestamp_ps"] <= time_window_ps[1]) &
+            (raw_data_ndarray["pulse_height_adc"] >= adcc_selection_window_po214_left) &
+            (raw_data_ndarray["pulse_height_adc"] <= adcc_selection_window_po214_right)])
+
+
+        # calculating the number of background events
+        n_bkg_expected_po218 = calc_number_of_expected_background_events(
+            input_t_meas_f_ps = time_window_ps[1],
+            adc_window = [adcc_selection_window_po218_left, adcc_selection_window_po218_right],
+            background_measurements_abspath_list = measurement_data_dict["activity_data_input"]["background_measurements_list"])
+        n_bkg_expected_po214 = calc_number_of_expected_background_events(
+            input_t_meas_f_ps = time_window_ps[1],
+            adc_window = [adcc_selection_window_po214_left, adcc_selection_window_po214_right],
+            background_measurements_abspath_list = measurement_data_dict["activity_data_input"]["background_measurements_list"])
+
+
+        # calculating the number of actual signal events        
+        n_sig_po218, n_sig_po218_lower, n_sig_po218_upper = calc_number_of_signal_events(n_meas=n_meas_po218, n_bkg_expected=n_bkg_expected_po218)
+        n_sig_po214, n_sig_po214_lower, n_sig_po214_upper = calc_number_of_signal_events(n_meas=n_meas_po214, n_bkg_expected=n_bkg_expected_po214)
+
+
+        # calculating the number of rn222 atoms present in the detection vessel at t_meas_i
+        n_rn222_at_t_meas_i_from_po218, n_rn222_at_t_meas_i_from_po218_lower, n_rn222_at_t_meas_i_from_po218_upper = error_propagation_for_one_dimensional_function(
+            f = get_n222rn0_from_detected_218po_decays,
+            x_mean = n_sig_po218,
+            x_lower = n_sig_po218_lower,
+            x_upper = n_sig_po218_upper,
+            param_dict = {"tf":time_window_ps[0]/(10**12), "ti":time_window_ps[1]/(10**12), "R":0, "n218po0":0},
+            n_mc = 10**6,
+            flag_verbose = True)
+        n_rn222_at_t_meas_i_from_po214, n_rn222_at_t_meas_i_from_po214_lower, n_rn222_at_t_meas_i_from_po214_upper = error_propagation_for_one_dimensional_function(
+            f = get_n222rn0_from_detected_214bi_decays,
+            x_mean = n_sig_po214,
+            x_lower = n_sig_po214_lower,
+            x_upper = n_sig_po214_upper,
+            param_dict = {"tf":time_window_ps[0]/(10**12), "ti":time_window_ps[1]/(10**12), "R":0, "n218po0":0, "n214pb0":0, "n214bi0":0},
+            n_mc = 10**6,
+            flag_verbose = True)
+        # for some unknown reason 'get_n222rn0_from_detected_218po_decays' and 'get_n222rn0_from_detected_214bi_decays' sometimes output negative values
+        n_rn222_at_t_meas_i_from_po218 = float(np.sqrt(n_rn222_at_t_meas_i_from_po218**2))
+        n_rn222_at_t_meas_i_from_po218_lower = float(np.sqrt(n_rn222_at_t_meas_i_from_po218_lower**2))
+        n_rn222_at_t_meas_i_from_po218_upper = float(np.sqrt(n_rn222_at_t_meas_i_from_po218_upper**2))
+        n_rn222_at_t_meas_i_from_po214 = float(np.sqrt(n_rn222_at_t_meas_i_from_po214**2))
+        n_rn222_at_t_meas_i_from_po214_lower = float(np.sqrt(n_rn222_at_t_meas_i_from_po214_lower**2))
+        n_rn222_at_t_meas_i_from_po214_upper = float(np.sqrt(n_rn222_at_t_meas_i_from_po214_upper**2))
+        n_rn222_at_t_meas_i_from_po218andpo214 = 0.5*(n_rn222_at_t_meas_i_from_po218 +n_rn222_at_t_meas_i_from_po214) # NOTE: At some point edit this to the actual combined value calculation (i.e., use Mathematica to compute the integral over the sum of both isotope-specific values)
+        n_rn222_at_t_meas_i_from_po218andpo214_lower = n_rn222_at_t_meas_i_from_po214_lower
+        n_rn222_at_t_meas_i_from_po218andpo214_upper = n_rn222_at_t_meas_i_from_po214_upper
+        print(f"n_rn222_at_t_meas_i (po218): {n_rn222_at_t_meas_i_from_po218:.2f}-{n_rn222_at_t_meas_i_from_po218_lower:.2f}+{n_rn222_at_t_meas_i_from_po218_upper:.2f}")
+        print(f"n_rn222_at_t_meas_i (po214): {n_rn222_at_t_meas_i_from_po214:.2f}-{n_rn222_at_t_meas_i_from_po214_lower:.2f}+{n_rn222_at_t_meas_i_from_po214_upper:.2f}")
+        print(f"n_rn222_at_t_meas_i (po218+po214): {n_rn222_at_t_meas_i_from_po218andpo214:.2f}-{n_rn222_at_t_meas_i_from_po218andpo214_lower:.2f}+{n_rn222_at_t_meas_i_from_po218andpo214_upper:.2f}")
+        if "po218" in measurement_data_dict["activity_data_input"]["flag_activity_data"] and "po214" in measurement_data_dict["activity_data_input"]["flag_activity_data"]:
+            n_rn222_at_t_meas_i = n_rn222_at_t_meas_i_from_po218andpo214
+            n_rn222_at_t_meas_i_lower = n_rn222_at_t_meas_i_from_po218andpo214_lower
+            n_rn222_at_t_meas_i_upper = n_rn222_at_t_meas_i_from_po218andpo214_upper
+        elif "po218" in measurement_data_dict["activity_data_input"]["flag_activity_data"]:
+            n_rn222_at_t_meas_i = n_rn222_at_t_meas_i_from_po218
+            n_rn222_at_t_meas_i_lower = n_rn222_at_t_meas_i_from_po218_lower
+            n_rn222_at_t_meas_i_upper = n_rn222_at_t_meas_i_from_po218_upper
+        elif "po214" in measurement_data_dict["activity_data_input"]["flag_activity_data"]:
+            n_rn222_at_t_meas_i = n_rn222_at_t_meas_i_from_po214
+            n_rn222_at_t_meas_i_lower = n_rn222_at_t_meas_i_from_po214_lower
+            n_rn222_at_t_meas_i_upper = n_rn222_at_t_meas_i_from_po214_upper
+        else:
+            raise Exception(f"You did not specify what kind of box counting analysis you'd like to use")
+
+
+        # extrapolating the equilibrium emanation activity
+        if measurement_data_dict["activity_data_input"]["flag_activity_extrapolation"] == False:
+            dt_trans = "NA"
+            dt_ema = "NA"
+            a_ema = "NA"
+            a_ema_error ="NA" 
+        elif measurement_data_dict["activity_data_input"]["flag_activity_extrapolation"] in ["default"]:
+            # retrieving the relevant times from the ELOG timestamps
+            t_ema_i = measurement_data_dict["measurement_information"]["t_ema_i"]
+            t_trans_i = measurement_data_dict["measurement_information"]["t_trans_i"]
+            t_meas_i = measurement_data_dict["measurement_information"]["t_meas_i"]
+            #t_meas_f = measurement_data_dict["measurement_information"]["t_meas_f"]
+            # calculating the relevant time deltas
+            #dt_meas = (timestamp_conversion(t_meas_f)-timestamp_conversion(t_meas_i)).total_seconds()
+            dt_meas = time_window_ps[1] /(10**12)
+            dt_ema = (timestamp_conversion(t_trans_i)-timestamp_conversion(t_ema_i)).total_seconds()
+            dt_trans = (timestamp_conversion(t_meas_i)-timestamp_conversion(t_trans_i)).total_seconds()
+            # calculating the activities
+            a_t_meas_i = n_rn222_at_t_meas_i *isotope_dict["rn222"]["decay_constant"]
+            a_t_meas_i_error = np.sqrt(n_rn222_at_t_meas_i_lower) *isotope_dict["rn222"]["decay_constant"] # NOTE: Still need to implement error propagation for box counting analysis! (maybe already done for sensitivity plot?)
+            # extrapolating from 't_meas_i' to 't_trans_i'
+            a_t_trans_i, a_t_trans_i_error = extrapolate_radon_activity(
+                dt_extrapolation_s = 0,
+                known_activity_at_dt_known_bq = a_t_meas_i,
+                known_dt_s = dt_trans,
+                known_activity_error_at_dt_known_bq = a_t_meas_i_error,
+                flag_exp_rise_or_decay = ["rise", "decay"][1],
+                lambda_222rn = isotope_dict["rn222"]["decay_constant"])
+            # extrapolating from 't_trans_i' to 'inf'
+            a_ema, a_ema_error = extrapolate_radon_activity(
+                dt_extrapolation_s = "inf",
+                known_activity_at_dt_known_bq = a_t_trans_i,
+                known_dt_s = dt_ema,
+                known_activity_error_at_dt_known_bq = a_t_trans_i_error,
+                flag_exp_rise_or_decay = ["rise", "decay"][0],
+                lambda_222rn = isotope_dict["rn222"]["decay_constant"])
+
+
+        # detection efficiency correction
+        if "detection_efficiency" in [*measurement_data_dict["activity_data_input"]]:
+            a_ema, a_ema_error = error_propagation_a_dividedby_b(
+                a = a_ema,
+                a_error = a_ema_error,
+                b = measurement_data_dict["activity_data_input"]["detection_efficiency"],
+                b_error = measurement_data_dict["activity_data_input"]["detection_efficiency_error"])
+
+
+        # filling the 'activity_data_output_dict'
+        activity_data_output_dict = {
+            "event_extraction" : {
+                "po218_adcc_window" : [adcc_selection_window_po218_left, adcc_selection_window_po218_right],
+                "po214_adcc_window" : [adcc_selection_window_po214_left, adcc_selection_window_po214_right],
+            },
+            "activity_extrapolation" : {
+                "dt_trans_s" : dt_trans,
+                "dt_ema_s" : dt_ema,
+                "dt_meas_s" : dt_meas,
+                "a_ema_bq" : a_ema,
+                "a_ema_error_bq" : a_ema_error,
+                "n_meas_214" : n_meas_po214,
+                "n_sig_214" : n_sig_po214,
+                "n_bkg_expected_214" : n_bkg_expected_po214,
+            },
+        }
+        print(activity_data_output_dict)
+
+
+    return activity_data_output_dict
+
+
+# This function is used to calculate the number of signal events from the measured events and calculated background events.
+# The reason the write a dedicated function for this seemingly trivial task is, that I might expand this later to also account for the issues raised in the Feldman and Cousins paper.
+# Also I was lazy and just used the Gaussian approximation... I should probably update that at some point in the future.
+def calc_number_of_signal_events(
+    n_meas,
+    n_bkg_expected):
+
+    n_sig = n_meas -n_bkg_expected
+    n_sig_lower = np.sqrt(n_meas +n_bkg_expected)
+    n_sig_upper = np.sqrt(n_meas +n_bkg_expected)
+
+    return n_sig, n_sig_lower, n_sig_upper
+
+
+# This function is used to calculate the expected number of background events, based on the given background data 'raw_data.npy'.
+def calc_number_of_expected_background_events(
+    input_t_meas_f_ps,
+    adc_window,
+    background_measurements_abspath_list):
+    
+    # calculating the respective 't_meas_f_ps' timestamps and storing timestamps and bkg arrays in dictionary
+    background_arrays_list = [np.load(abspath_bkg_data) for abspath_bkg_data in background_measurements_abspath_list]
+    t_meas_f_ps_dict = {}
+    for bkg_data in background_arrays_list:
+        t_meas_f_ps = np.max(bkg_data["timestamp_ps"])
+        t_meas_f_ps_dict.update({str(t_meas_f_ps) : bkg_data})
+    t_meas_f_ps_list = [int(key) for key in [*t_meas_f_ps_dict]]
+    t_meas_f_ps_list.sort()
+    #print(f"your timestamp: {input_t_meas_f_ps/(24*60*60*(10**12)):.4f} days")
+    #for i, tmstp in enumerate(t_meas_f_ps_list):
+    #    print(f"{i}th file: {tmstp/(24*60*60*(10**12)):.4f} days")
+
+    # looping over all values of 't_meas_f_ps' (in increasing order).
+    # In each iteration all counts detected therein are added and divided by the number of contributing files.
+    # The new value is then added to 'expected_number_of_background_events'
+    expected_number_of_background_events = 0
+    list_ctr = 0
+    tstmp_ps_current_low = 0
+    tstmp_ps_current_high = t_meas_f_ps_list[list_ctr] #  
+    # adding all the bkg arrays whose measurement duration is smaller than 'input_t_meas_f_ps'
+    while tstmp_ps_current_high < input_t_meas_f_ps:
+        n_add = 0
+        for i in range(list_ctr, len(t_meas_f_ps_list), 1):
+            bkg_array = t_meas_f_ps_dict[str(t_meas_f_ps_list[i])]
+            n_add += len(bkg_array[
+                (bkg_array["timestamp_ps"]>tstmp_ps_current_low) &
+                (bkg_array["timestamp_ps"]<tstmp_ps_current_high) &
+                (bkg_array["pulse_height_adc"]>adc_window[0]) &
+                (bkg_array["pulse_height_adc"]<adc_window[1])  ])
+        n_add = n_add/(len(t_meas_f_ps_list)-list_ctr)
+        expected_number_of_background_events += n_add
+        tstmp_ps_current_low = t_meas_f_ps_list[list_ctr]
+        tstmp_ps_current_high = t_meas_f_ps_list[list_ctr+1]
+        list_ctr += 1
+    # adding all the bkg arrays whose measurement duration is bigger than 'input_t_meas_f_ps'
+    tstmp_ps_current_high = input_t_meas_f_ps
+    n_add = 0
+    for i in range(list_ctr, len(t_meas_f_ps_list), 1):
+        #print(f"this is fine, i={i}")
+        bkg_array = t_meas_f_ps_dict[str(t_meas_f_ps_list[i])]
+        #print(f"this as well, i={i}")
+        n_add += len(bkg_array[
+            (bkg_array["timestamp_ps"]>tstmp_ps_current_low) &
+            (bkg_array["timestamp_ps"]<tstmp_ps_current_high) &
+            (bkg_array["pulse_height_adc"]>adc_window[0]) &
+            (bkg_array["pulse_height_adc"]<adc_window[1])  ])
+        #print(f"just like this, i={i}")
+    n_add = n_add/(len(t_meas_f_ps_list)-list_ctr)
+    expected_number_of_background_events += n_add
+
+    return expected_number_of_background_events
+
+#######################################
+### Decay Chain Model
+#######################################
+
+
+### Rn222
 
 
 # This function returns an analytical expression for the activity of Rn222 nuclei (retrieved from the linear Rn222 decay chain model with additional emanation source term).
@@ -1445,6 +2055,48 @@ def rn222(
         return 0
     else:
         return isotope_dict["rn222"]["decay_constant"] *((isotope_dict["rn222"]["decay_constant"]*n222rn0 + (-1 + np.exp(isotope_dict["rn222"]["decay_constant"]*t))*r)/(np.exp(isotope_dict["rn222"]["decay_constant"]*t)*isotope_dict["rn222"]["decay_constant"]))
+
+
+# This function is used to calculate the expected number of rn222 decays by integrating the analytical rn222 decay model over time.
+def get_number_of_expected_rn222_decays_between_ti_and_tf(
+    R, # rn222 equilibrium emanation activity (in 1/s)
+    tf, # time at which the data acquisition was started (in seconds after t=0) 
+    ti = 0, # time at which the data acquisition was stopped (in seconds after t=0) 
+    n222rn0 = 0,  # number of rn222 atoms present at time t=0
+):
+    return ((n222rn0 - R/isotope_dict["rn222"]["decay_constant"]) / np.exp(isotope_dict["rn222"]["decay_constant"]*ti)
++ (-n222rn0 + R/isotope_dict["rn222"]["decay_constant"]) / np.exp(isotope_dict["rn222"]["decay_constant"]*tf)
++ R*(tf - ti))
+
+
+# This function is used to calculate the rn222 emanation activity by solving the analytical rn222 decay model for 'R'.
+def get_r_from_detected_222rn_decays(
+    N, # number of detected rn222 decays
+    tf, # time in seconds at which the data acquisition was stopped, measured after t=0
+    ti = 0, # time in seconds at which the data acquisition was stopped, measured after t=0
+    n222rn0 = 0, # number of rn222 atoms present at t=0
+):
+    return ((isotope_dict["rn222"]["decay_constant"]*(np.exp(isotope_dict["rn222"]["decay_constant"]*(tf + ti))*N
+-np.exp(isotope_dict["rn222"]["decay_constant"]*tf)*n222rn0
++np.exp(isotope_dict["rn222"]["decay_constant"]*ti)*n222rn0))/(-np.exp(isotope_dict["rn222"]["decay_constant"]*tf)
++np.exp(isotope_dict["rn222"]["decay_constant"]*ti)
++np.exp(isotope_dict["rn222"]["decay_constant"]*(tf + ti))*isotope_dict["rn222"]["decay_constant"]*(tf - ti)))
+
+
+# This function is used to calculate the initial number of radon atoms 'n222rn0' by solving the analytical rn222 decay model for 'n222rn0'.
+def get_n222rn0_from_detected_222rn_decays(
+    N, # number of detected rn222 decays
+    tf, # time in seconds at which the data acquisition was stopped, measured after t=0
+    ti = 0, # time in seconds at which the data acquisition was stopped, measured after t=0
+    R = 0, # radon equilibrium emanation activity
+):
+    return ((np.exp(isotope_dict["rn222"]["decay_constant"]*tf)*R - np.exp(isotope_dict["rn222"]["decay_constant"]*ti)*R
++np.exp(isotope_dict["rn222"]["decay_constant"]*(tf + ti))
+*isotope_dict["rn222"]["decay_constant"]*(N + R*(-tf + ti)))/((np.exp(isotope_dict["rn222"]["decay_constant"]*tf)
+-np.exp(isotope_dict["rn222"]["decay_constant"]*ti))*isotope_dict["rn222"]["decay_constant"]))
+
+
+### Po218
 
 
 # This function returns an analytical expression for the activity of Po218 nuclei (retrieved from the linear Rn222 decay chain model with additional emanation source term).
@@ -1462,6 +2114,63 @@ def po218(
         return isotope_dict["po218"]["decay_constant"] *((isotope_dict["po218"]["decay_constant"]**2*n218po0 - (-1 + np.exp(np.float128(isotope_dict["po218"]["decay_constant"]*t)))*isotope_dict["rn222"]["decay_constant"]*r - isotope_dict["po218"]["decay_constant"]*(isotope_dict["rn222"]["decay_constant"]*(n218po0 + n222rn0 - np.exp(np.float128((isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t))*n222rn0) + (-np.exp(np.float128(isotope_dict["po218"]["decay_constant"]*t)) + np.exp(np.float128((isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t)))*r))/(np.exp(np.float128(isotope_dict["po218"]["decay_constant"]*t))*(isotope_dict["po218"]["decay_constant"]*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"]))))
 
 
+# This function is used to calculate the expected number of po218 decays by integrating the analytical po218 decay model over time.
+def get_number_of_expected_po218_decays_between_ti_and_tf(
+    R, # rn222 equilibrium emanation activity (in 1/s)
+    tf, # time at which the data acquisition was started (in seconds after t=0) 
+    ti = 0, # time at which the data acquisition was stopped (in seconds after t=0) 
+    n222rn0 = 0,  # number of rn222 atoms present at time t=0
+    n218po0 = 0,  # number of po218 atoms present at time t=0
+):
+    return ((np.exp(np.float128(isotope_dict["rn222"]["decay_constant"]*tf + isotope_dict["po218"]["decay_constant"]*(tf + ti)))*
+isotope_dict["po218"]["decay_constant"]**2*(isotope_dict["rn222"]["decay_constant"]*n222rn0 - R) - 
+np.exp(np.float128(isotope_dict["rn222"]["decay_constant"]*ti + isotope_dict["po218"]["decay_constant"]*(tf + ti)))*
+isotope_dict["po218"]["decay_constant"]**2*(isotope_dict["rn222"]["decay_constant"]*n222rn0 - R) + 
+np.exp(np.float128(isotope_dict["po218"]["decay_constant"]*ti + isotope_dict["rn222"]["decay_constant"]*(tf + ti)))*
+isotope_dict["rn222"]["decay_constant"]*((-isotope_dict["po218"]["decay_constant"]**2)*n218po0 + 
+isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*(n218po0 + n222rn0) - 
+isotope_dict["rn222"]["decay_constant"]*R) + 
+np.exp(np.float128(isotope_dict["po218"]["decay_constant"]*tf + isotope_dict["rn222"]["decay_constant"]*(tf + ti)))*
+isotope_dict["rn222"]["decay_constant"]*(isotope_dict["po218"]["decay_constant"]**2*n218po0 - 
+isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*(n218po0 + n222rn0) + 
+isotope_dict["rn222"]["decay_constant"]*R) + 
+np.exp(np.float128((isotope_dict["po218"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])*(tf + ti)))*
+isotope_dict["po218"]["decay_constant"]*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*isotope_dict["rn222"]["decay_constant"]*R*(tf - ti))/
+np.exp(np.float128((isotope_dict["po218"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])*(tf + ti)))/
+(isotope_dict["po218"]["decay_constant"]*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*isotope_dict["rn222"]["decay_constant"]))
+
+
+# This function is used to calculate the initial number of radon atoms 'n222rn0' by solving the analytical po218 decay model for 'n222rn0'.
+def get_n222rn0_from_detected_218po_decays(
+    N, # number of detected rn222 decays
+    tf, # time in seconds at which the data acquisition was stopped, measured after t=0
+    ti = 0, # time in seconds at which the data acquisition was stopped, measured after t=0
+    R = 0, # radon equilibrium emanation activity
+    n218po0 = 0, # initial number of po218 atoms
+):
+    return ((np.exp(np.float128(isotope_dict["rn222"]["decay_constant"]*tf + isotope_dict["po218"]["decay_constant"]*(tf + ti)))
+*isotope_dict["po218"]["decay_constant"]**2*R
+-np.exp(np.float128(isotope_dict["rn222"]["decay_constant"]*ti + isotope_dict["po218"]["decay_constant"]*(tf + ti)))*isotope_dict["po218"]["decay_constant"]**2*R
++np.exp(np.float128(isotope_dict["po218"]["decay_constant"]*tf + isotope_dict["rn222"]["decay_constant"]*(tf + ti)))
+*isotope_dict["rn222"]["decay_constant"]*((-isotope_dict["po218"]["decay_constant"]**2)*n218po0
++isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*n218po0 - isotope_dict["rn222"]["decay_constant"]*R)
++np.exp(np.float128(isotope_dict["po218"]["decay_constant"]*ti + isotope_dict["rn222"]["decay_constant"]*(tf + ti)))
+*isotope_dict["rn222"]["decay_constant"]*(isotope_dict["po218"]["decay_constant"]**2*n218po0
+-isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*n218po0 + isotope_dict["rn222"]["decay_constant"]*R)
++np.exp(np.float128((isotope_dict["po218"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"]))*(tf + ti))
+*isotope_dict["po218"]["decay_constant"]*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])
+*isotope_dict["rn222"]["decay_constant"]*(N + R*(-tf + ti)))
+/(isotope_dict["po218"]["decay_constant"]
+*isotope_dict["rn222"]["decay_constant"]*(np.exp(np.float128(isotope_dict["rn222"]["decay_constant"]*tf + isotope_dict["po218"]["decay_constant"]*(tf + ti)))
+*isotope_dict["po218"]["decay_constant"]
+-np.exp(np.float128(isotope_dict["rn222"]["decay_constant"]*ti + isotope_dict["po218"]["decay_constant"]*(tf + ti)))*isotope_dict["po218"]["decay_constant"]
+-np.exp(np.float128(isotope_dict["po218"]["decay_constant"]*tf + isotope_dict["rn222"]["decay_constant"]*(tf + ti)))*isotope_dict["rn222"]["decay_constant"]
++np.exp(np.float128(isotope_dict["po218"]["decay_constant"]*ti + isotope_dict["rn222"]["decay_constant"]*(tf + ti)))*isotope_dict["rn222"]["decay_constant"])))
+
+
+### Pb214
+
+
 # This function returns an analytical expression for the activity of Pb214 nuclei (retrieved from the linear Rn222 decay chain model with additional emanation source term).
 def pb214(
     t, # time in s
@@ -1476,6 +2185,9 @@ def pb214(
         return isotope_dict["pb214"]["decay_constant"] *((isotope_dict["pb214"]["decay_constant"]**3*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*n214pb0 + (-1 + np.exp(np.float128(isotope_dict["pb214"]["decay_constant"]*t)))*isotope_dict["po218"]["decay_constant"]*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*isotope_dict["rn222"]["decay_constant"]*r + isotope_dict["pb214"]["decay_constant"]**2*(isotope_dict["rn222"]["decay_constant"]**2*n214pb0 - isotope_dict["po218"]["decay_constant"]**2*(n214pb0 + n218po0 - np.exp(np.float128((isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t))*n218po0) + isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*(n218po0 - np.exp(np.float128((isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t))*n218po0 + (-np.exp(np.float128((isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)) + np.exp(np.float128((isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t)))*n222rn0) + (np.exp(np.float128(isotope_dict["pb214"]["decay_constant"]*t)) - np.exp(np.float128((isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t)))*isotope_dict["po218"]["decay_constant"]*r + (-np.exp(np.float128(isotope_dict["pb214"]["decay_constant"]*t)) + np.exp(np.float128((isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*isotope_dict["rn222"]["decay_constant"]*r) + isotope_dict["pb214"]["decay_constant"]*((-isotope_dict["po218"]["decay_constant"])*isotope_dict["rn222"]["decay_constant"]**2*(n214pb0 - (-1 + np.exp(np.float128((isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t)))*(n218po0 + n222rn0)) + (np.exp(np.float128(isotope_dict["pb214"]["decay_constant"]*t)) - np.exp((isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t))*isotope_dict["rn222"]["decay_constant"]**2*r + isotope_dict["po218"]["decay_constant"]**2*(isotope_dict["rn222"]["decay_constant"]*(n214pb0 + n218po0 - np.exp(np.float128((isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*t))*n218po0 + n222rn0 - np.exp(np.float128((isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t))*n222rn0) + (-np.exp(isotope_dict["pb214"]["decay_constant"]*t) + np.exp(np.float128((isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*t)))*r)))/np.exp(np.float128(isotope_dict["pb214"]["decay_constant"]*t))/(isotope_dict["pb214"]["decay_constant"]*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])))
 
 
+### Bi214
+
+
 # This function returns an analytical expression for the activity of Bi214 nuclei (retrieved from the linear Rn222 decay chain model with additional emanation source term).
 def bi214(
     t, # time in s
@@ -1488,7 +2200,7 @@ def bi214(
     if t<= 0:
         return 0
     else:
-        return isotope_dict["bi214"]["decay_constant"] *((isotope_dict["bi214"]["decay_constant"]**4*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])
+        return (isotope_dict["bi214"]["decay_constant"] *((isotope_dict["bi214"]["decay_constant"]**4*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])
 *(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*n214bi0 
 + (-1 + np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t)))*isotope_dict["pb214"]["decay_constant"]*(isotope_dict["pb214"]["decay_constant"] 
 - isotope_dict["po218"]["decay_constant"])*isotope_dict["po218"]["decay_constant"]*(isotope_dict["pb214"]["decay_constant"] 
@@ -1573,212 +2285,324 @@ def bi214(
 - isotope_dict["rn222"]["decay_constant"])*t)))*r))))/np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]*t))/(isotope_dict["bi214"]["decay_constant"]
 *(isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])
 *(isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])
-*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])))
+*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"]))))
 
 
-# This function is used to extract the 'peak_data_dict' from 'raw_data' and 'measurement_data'.
-def get_activity_data_dict(
-    measurement_data_dict,
-    raw_data_ndarray,
-    decay_model_fit_settings_dict = {
-        "fit_range_s" : [8000, 13000], # time interval since DAQ start (in seconds) that is considered for the fit
-        "activity_interval_ps" : activity_interval_h* 60 *60 *10**(12), # time interval (in picoseconds) during which the po218 and po214 decays are accumulated
-        "flag_calibration" : ["self_absolute_adcc", "self_relative_adcc", "self_relative_sigma"][1],
-        "po218_window" : [1000, 250],
-        "po214_window" : [1000, 250],
-        "flag_model_fit" : ["fit_po218_and_po214_independently", "fit_po218_and_po214_simultaneously"][1],
-        "p_opt_bounds" : ([0,0,0,0,0],[+np.inf,10,10,10,+np.inf]), # 
-        "p_opt_guess" : [0,0,0,0,0.02], # 
-        "flag_errors" : ["poissonian"][0]
-    },
-    activity_extrapolation_settings_dict = {
-        "flag_activity_extrapolation" : [False, "default"][1],
-    },
+# This function is used to calculate the expected number of bi214 decays by integrating the analytical bi214 decay model over time.
+def get_number_of_expected_bi214_decays_between_ti_and_tf(
+    R, # rn222 equilibrium emanation activity (in 1/s)
+    tf, # time at which the data acquisition was started (in seconds after t=0) 
+    ti = 0, # time at which the data acquisition was stopped (in seconds after t=0) 
+    n222rn0 = 0,  # number of rn222 atoms present at time t=0
+    n218po0 = 0,  # number of po218 atoms present at time t=0
+    n214pb0 = 0,  # number of pb214 atoms present at time t=0
+    n214bi0 = 0,  # number of bi214 atoms present at time t=0
 ):
+    return ((np.exp(np.float128(isotope_dict["po218"]["decay_constant"]*tf + isotope_dict["rn222"]["decay_constant"]*tf + isotope_dict["po218"]["decay_constant"]*ti
++isotope_dict["bi214"]["decay_constant"]*(tf + ti) + isotope_dict["pb214"]["decay_constant"]*(tf + ti)))
+*isotope_dict["bi214"]["decay_constant"]**2*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*isotope_dict["pb214"]["decay_constant"]**2
+*isotope_dict["po218"]["decay_constant"]**2
+*(-isotope_dict["bi214"]["decay_constant"] + isotope_dict["po218"]["decay_constant"])*(-isotope_dict["pb214"]["decay_constant"]
++isotope_dict["po218"]["decay_constant"])*(isotope_dict["rn222"]["decay_constant"]*n222rn0 - R)
+-np.exp(np.float128(isotope_dict["po218"]["decay_constant"]*tf + isotope_dict["po218"]["decay_constant"]*ti + isotope_dict["rn222"]["decay_constant"]*ti
++isotope_dict["bi214"]["decay_constant"]*(tf + ti) + isotope_dict["pb214"]["decay_constant"]*(tf + ti)))
+*isotope_dict["bi214"]["decay_constant"]**2*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*isotope_dict["pb214"]["decay_constant"]**2
+*isotope_dict["po218"]["decay_constant"]**2
+*(-isotope_dict["bi214"]["decay_constant"] + isotope_dict["po218"]["decay_constant"])*(-isotope_dict["pb214"]["decay_constant"]
++isotope_dict["po218"]["decay_constant"])*(isotope_dict["rn222"]["decay_constant"]*n222rn0 - R)
++np.exp(np.float128(isotope_dict["rn222"]["decay_constant"]*tf + isotope_dict["po218"]["decay_constant"]*ti + isotope_dict["rn222"]["decay_constant"]*ti
++isotope_dict["bi214"]["decay_constant"]*(tf + ti) + isotope_dict["pb214"]["decay_constant"]*(tf + ti)))
+*isotope_dict["bi214"]["decay_constant"]**2*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*isotope_dict["pb214"]["decay_constant"]**2
+*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])
+*isotope_dict["rn222"]["decay_constant"]*((-isotope_dict["po218"]["decay_constant"]**2)*n218po0
++isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*(n218po0 + n222rn0)
+-isotope_dict["rn222"]["decay_constant"]*R)
++np.exp(np.float128(isotope_dict["po218"]["decay_constant"]*tf + isotope_dict["rn222"]["decay_constant"]*tf + isotope_dict["rn222"]["decay_constant"]*ti
++isotope_dict["bi214"]["decay_constant"]*(tf + ti) + isotope_dict["pb214"]["decay_constant"]*(tf + ti)))
+*isotope_dict["bi214"]["decay_constant"]**2*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*isotope_dict["pb214"]["decay_constant"]**2
+*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])
+*isotope_dict["rn222"]["decay_constant"]*(isotope_dict["po218"]["decay_constant"]**2*n218po0
+-isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*(n218po0 + n222rn0)
++isotope_dict["rn222"]["decay_constant"]*R)
+-np.exp(np.float128(isotope_dict["rn222"]["decay_constant"]*tf + isotope_dict["pb214"]["decay_constant"]*ti + isotope_dict["rn222"]["decay_constant"]*ti
++isotope_dict["bi214"]["decay_constant"]*(tf + ti) + isotope_dict["po218"]["decay_constant"]*(tf + ti)))
+*isotope_dict["bi214"]["decay_constant"]**2*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*isotope_dict["po218"]["decay_constant"]
+*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])
+*isotope_dict["rn222"]["decay_constant"]*(isotope_dict["pb214"]["decay_constant"]**3*n214pb0
+-isotope_dict["pb214"]["decay_constant"]**2*(isotope_dict["rn222"]["decay_constant"]*n214pb0
++isotope_dict["po218"]["decay_constant"]*(n214pb0 + n218po0))
++isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]
+*isotope_dict["rn222"]["decay_constant"]*(n214pb0 + n218po0 + n222rn0)
+-isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*R)
++np.exp(np.float128(isotope_dict["pb214"]["decay_constant"]*tf
++isotope_dict["bi214"]["decay_constant"]*(tf + ti) + (isotope_dict["po218"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])*(tf
++ti)))*isotope_dict["bi214"]["decay_constant"]**2*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])
+*isotope_dict["po218"]["decay_constant"]*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])
+*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])
+*isotope_dict["rn222"]["decay_constant"]*(isotope_dict["pb214"]["decay_constant"]**3*n214pb0
+-isotope_dict["pb214"]["decay_constant"]**2*(isotope_dict["rn222"]["decay_constant"]*n214pb0
++isotope_dict["po218"]["decay_constant"]*(n214pb0 + n218po0))
++isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]
+*isotope_dict["rn222"]["decay_constant"]*(n214pb0 + n218po0 + n222rn0)
+-isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*R)
++np.exp(np.float128(isotope_dict["rn222"]["decay_constant"]*tf + isotope_dict["bi214"]["decay_constant"]*ti + isotope_dict["rn222"]["decay_constant"]*ti
++isotope_dict["pb214"]["decay_constant"]*(tf + ti) + isotope_dict["po218"]["decay_constant"]*(tf + ti)))
+*isotope_dict["pb214"]["decay_constant"]*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*isotope_dict["po218"]["decay_constant"]
+*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])
+*isotope_dict["rn222"]["decay_constant"]*((-isotope_dict["bi214"]["decay_constant"]**4)*n214bi0
++isotope_dict["bi214"]["decay_constant"]**3*((isotope_dict["po218"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])*n214bi0
++isotope_dict["pb214"]["decay_constant"]*(n214bi0 + n214pb0))
+-isotope_dict["bi214"]["decay_constant"]**2*(isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*n214bi0
++isotope_dict["pb214"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*(n214bi0 + n214pb0)
++isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]*(n214bi0 + n214pb0 + n218po0))
++isotope_dict["bi214"]["decay_constant"]*isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]
+*isotope_dict["rn222"]["decay_constant"]*(n214bi0 + n214pb0 + n218po0 + n222rn0)
+-isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*R)
++np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]
+*tf + (isotope_dict["pb214"]["decay_constant"] + isotope_dict["po218"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])*(tf + ti)))
+*isotope_dict["pb214"]["decay_constant"]*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])
+*isotope_dict["po218"]["decay_constant"]*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])
+*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])
+*isotope_dict["rn222"]["decay_constant"]*(isotope_dict["bi214"]["decay_constant"]**4*n214bi0
+-isotope_dict["bi214"]["decay_constant"]**3*((isotope_dict["po218"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])*n214bi0
++isotope_dict["pb214"]["decay_constant"]*(n214bi0 + n214pb0))
++isotope_dict["bi214"]["decay_constant"]**2*(isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*n214bi0
++isotope_dict["pb214"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*(n214bi0 + n214pb0)
++isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]*(n214bi0 + n214pb0 + n218po0))
+-isotope_dict["bi214"]["decay_constant"]*isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]
+*isotope_dict["rn222"]["decay_constant"]*(n214bi0 + n214pb0 + n218po0 + n222rn0)
++isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*R)
++np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] + isotope_dict["pb214"]["decay_constant"] + isotope_dict["po218"]["decay_constant"]
++isotope_dict["rn222"]["decay_constant"])*(tf + ti)))
+*isotope_dict["bi214"]["decay_constant"]*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])
+*isotope_dict["pb214"]["decay_constant"]*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])
+*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])
+*isotope_dict["po218"]["decay_constant"]*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"]
+-isotope_dict["rn222"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*isotope_dict["rn222"]["decay_constant"]
+*R*(tf - ti))
+/np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] + isotope_dict["pb214"]["decay_constant"] + isotope_dict["po218"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])*(tf
++ti)))/(isotope_dict["bi214"]["decay_constant"]*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])
+*isotope_dict["pb214"]["decay_constant"]*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])
+*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])
+*isotope_dict["po218"]["decay_constant"]*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"]
+-isotope_dict["rn222"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*isotope_dict["rn222"]["decay_constant"]))
 
-    # analysis preparation
-    timestamp_edges_ps = [0]
-    timestamp_ctr = 1
-    while timestamp_edges_ps[len(timestamp_edges_ps)-1] +decay_model_fit_settings_dict["activity_interval_ps"] < max(raw_data_ndarray["timestamp_ps"]):
-        timestamp_edges_ps.append(decay_model_fit_settings_dict["activity_interval_ps"]*timestamp_ctr)
-        timestamp_ctr += 1
-    timestamp_centers_ps = [i +0.5*decay_model_fit_settings_dict["activity_interval_ps"] for i in timestamp_edges_ps[:-1]]
-    timestamp_centers_seconds = [i/(1000**4) for i in timestamp_centers_ps]
 
-    # extracting the detected counts per time bin
-    decays_per_activity_interval_po218 = []
-    decays_per_activity_interval_po214 = []
-    decays_per_activity_interval_po218_errors_lower = []
-    decays_per_activity_interval_po214_errors_lower = []
-    decays_per_activity_interval_po218_errors_upper = []
-    decays_per_activity_interval_po214_errors_upper = []
+# This function is used to calculate the initial number of radon atoms 'n222rn0' by solving the analytical po218 decay model for 'n222rn0'.
+def get_n222rn0_from_detected_214bi_decays(
+    N, # number of detected rn222 decays
+    tf, # time in seconds at which the data acquisition was stopped, measured after t=0
+    ti = 0, # time in seconds at which the data acquisition was stopped, measured after t=0
+    R = 0, # radon equilibrium emanation activity
+    n218po0 = 0, # initial number of po218 atoms
+    n214pb0 = 0, # initial number of pb214 atoms
+    n214bi0 = 0, # initial number of bi214 atoms
+):
+    return ((np.exp(np.float128((isotope_dict["bi214"]["decay_constant"] + isotope_dict["pb214"]["decay_constant"] + isotope_dict["po218"]["decay_constant"]
++isotope_dict["rn222"]["decay_constant"])*(tf + ti)))*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["pb214"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])
+*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"]
+-isotope_dict["rn222"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])
+*(-N + (isotope_dict["bi214"]["decay_constant"]**3
+*n214bi0)/(np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]
+*ti))*((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])))
++(isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]
+*n214bi0)/(np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]
+*tf))*((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])))
+-(isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]
+*n214bi0)/(np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]
+*ti))*((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])))
++(isotope_dict["bi214"]["decay_constant"]**3
+*n214bi0)/(np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]
+*tf))*((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(-isotope_dict["bi214"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])))
++(isotope_dict["bi214"]["decay_constant"]*isotope_dict["pb214"]["decay_constant"]**2
+*n214pb0)/(np.exp(np.float128(isotope_dict["pb214"]["decay_constant"]
+*tf))*((-isotope_dict["bi214"]["decay_constant"] + isotope_dict["pb214"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])))
+-(isotope_dict["bi214"]["decay_constant"]*isotope_dict["pb214"]["decay_constant"]**2
+*n214pb0)/(np.exp(np.float128(isotope_dict["pb214"]["decay_constant"]
+*ti))*((-isotope_dict["bi214"]["decay_constant"] + isotope_dict["pb214"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])))
++(isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]
+*n214pb0)/(np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]
+*tf))*((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])))
+-(isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]
+*n214pb0)/(np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]
+*ti))*((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])))
++(isotope_dict["bi214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]
+*n214pb0)/(np.exp(np.float128(isotope_dict["pb214"]["decay_constant"]
+*tf))*((-isotope_dict["bi214"]["decay_constant"] + isotope_dict["pb214"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])))
+-(isotope_dict["bi214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]
+*n214pb0)/(np.exp(np.float128(isotope_dict["pb214"]["decay_constant"]
+*ti))*((-isotope_dict["bi214"]["decay_constant"] + isotope_dict["pb214"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])))
++(isotope_dict["bi214"]["decay_constant"]**2*((isotope_dict["po218"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])*n214bi0
++isotope_dict["pb214"]["decay_constant"]*(n214bi0 + n214pb0)))/(np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]
+*tf))*((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])
+*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["rn222"]["decay_constant"]))) - (isotope_dict["bi214"]["decay_constant"]**2*((isotope_dict["po218"]["decay_constant"]
++isotope_dict["rn222"]["decay_constant"])*n214bi0
++isotope_dict["pb214"]["decay_constant"]*(n214bi0 + n214pb0)))
+/(np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]
+*ti))*((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["rn222"]["decay_constant"]))) + (isotope_dict["bi214"]["decay_constant"]*isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]
+*n218po0)
+/(np.exp(np.float128(isotope_dict["po218"]["decay_constant"]
+*tf))*((isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*(-isotope_dict["pb214"]["decay_constant"]
++isotope_dict["po218"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"]
+-isotope_dict["rn222"]["decay_constant"]))) + (isotope_dict["bi214"]["decay_constant"]*isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]
+*n218po0)
+/(np.exp(np.float128(isotope_dict["po218"]["decay_constant"]
+*ti))*((-isotope_dict["bi214"]["decay_constant"] + isotope_dict["po218"]["decay_constant"])*(-isotope_dict["pb214"]["decay_constant"]
++isotope_dict["po218"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"]
+-isotope_dict["rn222"]["decay_constant"]))) + (isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]
+*n218po0)
+/(np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]
+*tf))*((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["rn222"]["decay_constant"]))) - (isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]
+*n218po0)
+/(np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]
+*ti))*((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["rn222"]["decay_constant"]))) + (isotope_dict["bi214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]
+*n218po0)
+/(np.exp(np.float128(isotope_dict["pb214"]["decay_constant"]
+*tf))*((-isotope_dict["bi214"]["decay_constant"] + isotope_dict["pb214"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"]
+-isotope_dict["rn222"]["decay_constant"]))) - (isotope_dict["bi214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]
+*n218po0)
+/(np.exp(np.float128(isotope_dict["pb214"]["decay_constant"]
+*ti))*((-isotope_dict["bi214"]["decay_constant"] + isotope_dict["pb214"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"]
+-isotope_dict["rn222"]["decay_constant"]))) + (isotope_dict["bi214"]["decay_constant"]*isotope_dict["pb214"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]
+*n218po0)
+/(np.exp(np.float128(isotope_dict["po218"]["decay_constant"]
+*tf))*((-isotope_dict["bi214"]["decay_constant"] + isotope_dict["po218"]["decay_constant"])*(-isotope_dict["pb214"]["decay_constant"]
++isotope_dict["po218"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"]
+-isotope_dict["rn222"]["decay_constant"]))) - (isotope_dict["bi214"]["decay_constant"]*isotope_dict["pb214"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]
+*n218po0)
+/(np.exp(np.float128(isotope_dict["po218"]["decay_constant"]
+*ti))*((-isotope_dict["bi214"]["decay_constant"] + isotope_dict["po218"]["decay_constant"])*(-isotope_dict["pb214"]["decay_constant"]
++isotope_dict["po218"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])))
++(isotope_dict["bi214"]["decay_constant"]
+*isotope_dict["pb214"]["decay_constant"]*(isotope_dict["rn222"]["decay_constant"]*n214pb0
++isotope_dict["po218"]["decay_constant"]*(n214pb0 + n218po0)))/(np.exp(np.float128(isotope_dict["pb214"]["decay_constant"]
+*tf))*((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])
+*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"]))) + (isotope_dict["bi214"]["decay_constant"]
+*isotope_dict["pb214"]["decay_constant"]*(isotope_dict["rn222"]["decay_constant"]*n214pb0
++isotope_dict["po218"]["decay_constant"]*(n214pb0 + n218po0)))
+/(np.exp(np.float128(isotope_dict["pb214"]["decay_constant"]
+*ti))*((-isotope_dict["bi214"]["decay_constant"] + isotope_dict["pb214"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])))
++(isotope_dict["bi214"]["decay_constant"]*(isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*n214bi0
++isotope_dict["pb214"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*(n214bi0 + n214pb0)
++isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]*(n214bi0 + n214pb0 + n218po0)))
+/(np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]
+*ti))*((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])))
++(isotope_dict["bi214"]["decay_constant"]*(isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*n214bi0
++isotope_dict["pb214"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]*(n214bi0 + n214pb0)
++isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]*(n214bi0 + n214pb0 + n218po0)))
+/(np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]
+*tf))*((isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(-isotope_dict["bi214"]["decay_constant"]
++isotope_dict["rn222"]["decay_constant"]))) + (isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]
+*R)
+/(np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]
+*ti))*(isotope_dict["bi214"]["decay_constant"]*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["pb214"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])))
++(isotope_dict["bi214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]
+*R)/(np.exp(np.float128(isotope_dict["pb214"]["decay_constant"]
+*ti))*(isotope_dict["pb214"]["decay_constant"]*(-isotope_dict["bi214"]["decay_constant"]
++isotope_dict["pb214"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])))
++(isotope_dict["bi214"]["decay_constant"]*isotope_dict["pb214"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]
+*R)/(np.exp(np.float128(isotope_dict["po218"]["decay_constant"]
+*ti))*(isotope_dict["po218"]["decay_constant"]*(-isotope_dict["bi214"]["decay_constant"]
++isotope_dict["po218"]["decay_constant"])*(-isotope_dict["pb214"]["decay_constant"]
++isotope_dict["po218"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])))
++(isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]
+*R)/(np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]
+*tf))*(isotope_dict["bi214"]["decay_constant"]*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["pb214"]["decay_constant"])*(isotope_dict["bi214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(-isotope_dict["bi214"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])))
++(isotope_dict["bi214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]
+*R)/(np.exp(np.float128(isotope_dict["pb214"]["decay_constant"]
+*tf))*(isotope_dict["pb214"]["decay_constant"]*(-isotope_dict["bi214"]["decay_constant"]
++isotope_dict["pb214"]["decay_constant"])*(isotope_dict["pb214"]["decay_constant"]
+-isotope_dict["po218"]["decay_constant"])*(-isotope_dict["pb214"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])))
++(isotope_dict["bi214"]["decay_constant"]*isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]
+*R)/(np.exp(np.float128(isotope_dict["rn222"]["decay_constant"]*tf))*((isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])
+*isotope_dict["rn222"]["decay_constant"]*(-isotope_dict["bi214"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])*(-isotope_dict["pb214"]["decay_constant"]
++isotope_dict["rn222"]["decay_constant"])))
++(isotope_dict["bi214"]["decay_constant"]*isotope_dict["pb214"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]
+*R)/(np.exp(np.float128(isotope_dict["po218"]["decay_constant"]
+*tf))*(isotope_dict["po218"]["decay_constant"]*(-isotope_dict["bi214"]["decay_constant"]
++isotope_dict["po218"]["decay_constant"])*(-isotope_dict["pb214"]["decay_constant"]
++isotope_dict["po218"]["decay_constant"])*(-isotope_dict["po218"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])))
++(isotope_dict["bi214"]["decay_constant"]*isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]
+*R)/(np.exp(np.float128(isotope_dict["rn222"]["decay_constant"]
+*ti))*(isotope_dict["rn222"]["decay_constant"]*(-isotope_dict["bi214"]["decay_constant"]
++isotope_dict["rn222"]["decay_constant"])*(-isotope_dict["pb214"]["decay_constant"]
++isotope_dict["rn222"]["decay_constant"])*(-isotope_dict["po218"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])))
++R*(tf - ti)))/((-np.exp(np.float128(isotope_dict["po218"]["decay_constant"]*tf + isotope_dict["rn222"]["decay_constant"]*tf
++isotope_dict["po218"]["decay_constant"]*ti + isotope_dict["bi214"]["decay_constant"]*(tf + ti)
++isotope_dict["pb214"]["decay_constant"]*(tf + ti))))
+*isotope_dict["bi214"]["decay_constant"]*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])
+*isotope_dict["pb214"]["decay_constant"]
+*isotope_dict["po218"]["decay_constant"]*(-isotope_dict["bi214"]["decay_constant"] + isotope_dict["po218"]["decay_constant"])*(-isotope_dict["pb214"]["decay_constant"]
++isotope_dict["po218"]["decay_constant"])
++np.exp(np.float128(isotope_dict["po218"]["decay_constant"]*tf + isotope_dict["po218"]["decay_constant"]*ti + isotope_dict["rn222"]["decay_constant"]*ti
++isotope_dict["bi214"]["decay_constant"]*(tf + ti) + isotope_dict["pb214"]["decay_constant"]*(tf + ti)))
+*isotope_dict["bi214"]["decay_constant"]*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*isotope_dict["pb214"]["decay_constant"]*isotope_dict["po218"]["decay_constant"]
+*(-isotope_dict["bi214"]["decay_constant"] + isotope_dict["po218"]["decay_constant"])*(-isotope_dict["pb214"]["decay_constant"]
++isotope_dict["po218"]["decay_constant"])
+-np.exp(np.float128(isotope_dict["pb214"]["decay_constant"]*tf
++isotope_dict["bi214"]["decay_constant"]*(tf + ti) + (isotope_dict["po218"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])*(tf
++ti)))*isotope_dict["bi214"]["decay_constant"]
+*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])
+*isotope_dict["po218"]["decay_constant"]*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*(isotope_dict["po218"]["decay_constant"]
+-isotope_dict["rn222"]["decay_constant"])*isotope_dict["rn222"]["decay_constant"]
++np.exp(np.float128(isotope_dict["bi214"]["decay_constant"]
+*tf + (isotope_dict["pb214"]["decay_constant"] + isotope_dict["po218"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])*(tf + ti)))
+*isotope_dict["pb214"]["decay_constant"]*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])
+*isotope_dict["po218"]["decay_constant"]*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])
+*(isotope_dict["po218"]["decay_constant"] - isotope_dict["rn222"]["decay_constant"])*isotope_dict["rn222"]["decay_constant"]
++np.exp(np.float128(isotope_dict["po218"]["decay_constant"]*tf + isotope_dict["rn222"]["decay_constant"]*tf + isotope_dict["rn222"]["decay_constant"]*ti
++isotope_dict["bi214"]["decay_constant"]*(tf + ti) + isotope_dict["pb214"]["decay_constant"]*(tf + ti)))*isotope_dict["bi214"]["decay_constant"]
+*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*isotope_dict["pb214"]["decay_constant"]
+*isotope_dict["rn222"]["decay_constant"]*(-isotope_dict["bi214"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])*(-isotope_dict["pb214"]["decay_constant"]
++isotope_dict["rn222"]["decay_constant"])
+-np.exp(np.float128(isotope_dict["rn222"]["decay_constant"]*tf + isotope_dict["po218"]["decay_constant"]*ti + isotope_dict["rn222"]["decay_constant"]*ti
++isotope_dict["bi214"]["decay_constant"]*(tf + ti) + isotope_dict["pb214"]["decay_constant"]*(tf + ti)))
+*isotope_dict["bi214"]["decay_constant"]*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["pb214"]["decay_constant"])*isotope_dict["pb214"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]
+*(-isotope_dict["bi214"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])*(-isotope_dict["pb214"]["decay_constant"]
++isotope_dict["rn222"]["decay_constant"])
++np.exp(np.float128(isotope_dict["rn222"]["decay_constant"]*tf + isotope_dict["pb214"]["decay_constant"]*ti + isotope_dict["rn222"]["decay_constant"]*ti
++isotope_dict["bi214"]["decay_constant"]*(tf + ti) + isotope_dict["po218"]["decay_constant"]*(tf + ti)))
+*isotope_dict["bi214"]["decay_constant"]*(isotope_dict["bi214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*isotope_dict["po218"]["decay_constant"]
+*isotope_dict["rn222"]["decay_constant"]*(-isotope_dict["bi214"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])*(-isotope_dict["po218"]["decay_constant"]
++isotope_dict["rn222"]["decay_constant"])
+-np.exp(np.float128(isotope_dict["rn222"]["decay_constant"]*tf + isotope_dict["bi214"]["decay_constant"]*ti + isotope_dict["rn222"]["decay_constant"]*ti
++isotope_dict["pb214"]["decay_constant"]*(tf + ti) + isotope_dict["po218"]["decay_constant"]*(tf + ti)))
+*isotope_dict["pb214"]["decay_constant"]*(isotope_dict["pb214"]["decay_constant"] - isotope_dict["po218"]["decay_constant"])*isotope_dict["po218"]["decay_constant"]*isotope_dict["rn222"]["decay_constant"]
+*(-isotope_dict["pb214"]["decay_constant"] + isotope_dict["rn222"]["decay_constant"])*(-isotope_dict["po218"]["decay_constant"]
++isotope_dict["rn222"]["decay_constant"])))
 
-    # determining the adcc selection windows for the individual peaks
-    if decay_model_fit_settings_dict["flag_calibration"] not in ["self_absolute_adcc", "self_relative_adcc", "self_relative_sigma"]:
-        print(f"include calibration by external file here")
-    else:
-        list_of_peaknums_with_a_priori_entries = [peaknum for peaknum in[*measurement_data_dict["peak_data"]] if "a_priori" in [*measurement_data_dict["peak_data"][peaknum]]]
-        po218_peaknum = [a_priori_peaknum for a_priori_peaknum in list_of_peaknums_with_a_priori_entries if measurement_data_dict["peak_data"][a_priori_peaknum]["a_priori"]["isotope"]=="po218"][0]
-        po214_peaknum = [a_priori_peaknum for a_priori_peaknum in list_of_peaknums_with_a_priori_entries if measurement_data_dict["peak_data"][a_priori_peaknum]["a_priori"]["isotope"]=="po214"][0]
-        if decay_model_fit_settings_dict["flag_calibration"] == "self_absolute_adcc":
-            adcc_selection_window_po218_left = decay_model_fit_settings_dict["po218_window"][0]
-            adcc_selection_window_po218_right = decay_model_fit_settings_dict["po218_window"][1]
-            adcc_selection_window_po214_left = decay_model_fit_settings_dict["po214_window"][0]
-            adcc_selection_window_po214_right = decay_model_fit_settings_dict["po214_window"][1]
-        elif decay_model_fit_settings_dict["flag_calibration"] == "self_relative_adcc":
-            adcc_selection_window_po218_left = measurement_data_dict["peak_data"][po218_peaknum]["fit_data"]["mu"] -decay_model_fit_settings_dict["po218_window"][0]
-            adcc_selection_window_po218_right = measurement_data_dict["peak_data"][po218_peaknum]["fit_data"]["mu"] +decay_model_fit_settings_dict["po218_window"][1]
-            adcc_selection_window_po214_left = measurement_data_dict["peak_data"][po214_peaknum]["fit_data"]["mu"] -decay_model_fit_settings_dict["po214_window"][0]
-            adcc_selection_window_po214_right = measurement_data_dict["peak_data"][po214_peaknum]["fit_data"]["mu"] +decay_model_fit_settings_dict["po214_window"][1]
-        elif decay_model_fit_settings_dict["flag_calibration"] == "self_relative_sigma":
-            adcc_selection_window_po218_left = measurement_data_dict["peak_data"][po218_peaknum]["fit_data"]["mu"] -(decay_model_fit_settings_dict["po218_window"][0] *measurement_data_dict["peak_data"][po218_peaknum]["fit_data"]["sigma"])
-            adcc_selection_window_po218_right = measurement_data_dict["peak_data"][po218_peaknum]["fit_data"]["mu"] +(decay_model_fit_settings_dict["po218_window"][1] *measurement_data_dict["peak_data"][po218_peaknum]["fit_data"]["sigma"])
-            adcc_selection_window_po214_left = measurement_data_dict["peak_data"][po214_peaknum]["fit_data"]["mu"] -(decay_model_fit_settings_dict["po214_window"][0] *measurement_data_dict["peak_data"][po214_peaknum]["fit_data"]["sigma"])
-            adcc_selection_window_po214_right = measurement_data_dict["peak_data"][po214_peaknum]["fit_data"]["mu"] +(decay_model_fit_settings_dict["po214_window"][1] *measurement_data_dict["peak_data"][po214_peaknum]["fit_data"]["sigma"])
 
-    # determining the detected po218 and po214 decays per 'activity_interval_ps'
-    for i in range(len(timestamp_edges_ps)-1):
-        decays_per_activity_interval_po218.append(len(raw_data_ndarray[
-            (raw_data_ndarray["timestamp_ps"] >= timestamp_edges_ps[i]) &
-            (raw_data_ndarray["timestamp_ps"] <= timestamp_edges_ps[i+1]) &
-            (raw_data_ndarray["pulse_height_adc"] >= adcc_selection_window_po218_left) &
-            (raw_data_ndarray["pulse_height_adc"] <= adcc_selection_window_po218_right)]))
-        decays_per_activity_interval_po214.append(len(raw_data_ndarray[
-            (raw_data_ndarray["timestamp_ps"] >= timestamp_edges_ps[i]) &
-            (raw_data_ndarray["timestamp_ps"] <= timestamp_edges_ps[i+1]) &
-            (raw_data_ndarray["pulse_height_adc"] >= adcc_selection_window_po214_left) &
-            (raw_data_ndarray["pulse_height_adc"] <= adcc_selection_window_po214_right)]))
-    for i in range(len(decays_per_activity_interval_po218)):
-        decays_per_activity_interval_po218_errors_lower.append(calc_poissonian_error(number_of_counts=decays_per_activity_interval_po218[i], flag_mode=decay_model_fit_settings_dict["flag_errors"])[0])
-        decays_per_activity_interval_po218_errors_upper.append(calc_poissonian_error(number_of_counts=decays_per_activity_interval_po218[i], flag_mode=decay_model_fit_settings_dict["flag_errors"])[1])
-        decays_per_activity_interval_po214_errors_lower.append(calc_poissonian_error(number_of_counts=decays_per_activity_interval_po214[i], flag_mode=decay_model_fit_settings_dict["flag_errors"])[0])
-        decays_per_activity_interval_po214_errors_upper.append(calc_poissonian_error(number_of_counts=decays_per_activity_interval_po214[i], flag_mode=decay_model_fit_settings_dict["flag_errors"])[1])
-
-    # model fit
-    if decay_model_fit_settings_dict["flag_model_fit"] == "fit_po218_and_po214_independently":
-        print(f"This still needs to be implemented")
-    elif decay_model_fit_settings_dict["flag_model_fit"] == "fit_po218_and_po214_simultaneously":
-        # defining a function that allows to simultaneously fit both the po218 and po214 activities
-        def constrained_fit_function(double_bin_centers, n222rn0, n218po0, n214pb0, n214bi0, r):
-            l = len(double_bin_centers)
-            result_1 = integral_function_po218(double_bin_centers[:l], n222rn0, n218po0, n214pb0, n214bi0, r)
-            result_2 = integral_function_po214(double_bin_centers[l:], n222rn0, n218po0, n214pb0, n214bi0, r)
-            return result_1 +result_2
-        # fitting the measured activities
-        p_opt, p_cov = curve_fit(
-            f =  constrained_fit_function,
-            xdata = timestamp_centers_seconds +timestamp_centers_seconds,
-            ydata = decays_per_activity_interval_po218 +decays_per_activity_interval_po214,
-            sigma = decays_per_activity_interval_po218_errors_upper +decays_per_activity_interval_po214_errors_upper,
-            absolute_sigma = True,
-            bounds = decay_model_fit_settings_dict["p_opt_bounds"],
-            p0 = decay_model_fit_settings_dict["p_opt_guess"])
-            #method = 'lm', # "lm" cannot handle covariance matrices with deficient rank
-        p_err = np.sqrt(np.diag(p_cov))
-        po218_n222rn0 = p_opt[0]
-        po218_n218po0 = p_opt[1]
-        po218_n214pb0 = p_opt[2]
-        po218_n214bi0 = p_opt[3]
-        po218_r = p_opt[4]
-        po218_n222rn0_error = p_err[0]
-        po218_n218po0_error = p_err[1]
-        po218_n214pb0_error = p_err[2]
-        po218_n214bi0_error = p_err[3]
-        po218_r_error = p_err[4]
-        po214_n222rn0 = p_opt[0]
-        po214_n218po0 = p_opt[1]
-        po214_n214pb0 = p_opt[2]
-        po214_n214bi0 = p_opt[3]
-        po214_r = p_opt[4]
-        po214_n222rn0_error = p_err[0]
-        po214_n218po0_error = p_err[1]
-        po214_n214pb0_error = p_err[2]
-        po214_n214bi0_error = p_err[3]
-        po214_r_error = p_err[4]
-
-    # extrapolating the equilibrium emanation activity
-    if activity_extrapolation_settings_dict["flag_activity_extrapolation"] == False:
-        dt_trans = "NA"
-        dt_ema = "NA"
-        a_ema = "NA"
-        a_ema_error ="NA" 
-    elif activity_extrapolation_settings_dict["flag_activity_extrapolation"] in ["default"]:
-        # retrieving the relevant times from the ELOG timestamps
-        t_ema_i = measurement_data_dict[key_measurement_information]["t_ema_i"]
-        t_trans_i = measurement_data_dict[key_measurement_information]["t_trans_i"]
-        t_meas_i = measurement_data_dict[key_measurement_information]["t_meas_i"]
-        # calculating the relevant time deltas
-        #dt_meas = (timestamp_conversion(t_meas_f)-timestamp_conversion(t_meas_i)).total_seconds()
-        dt_ema = (timestamp_conversion(t_trans_i)-timestamp_conversion(t_ema_i)).total_seconds()
-        dt_trans = (timestamp_conversion(t_meas_i)-timestamp_conversion(t_trans_i)).total_seconds()
-        # calculating the activities
-        a_t_meas_i = po214_n222rn0 *isotope_dict["rn222"]["decay_constant"]
-        a_t_meas_i_error = po214_n222rn0_error *isotope_dict["rn222"]["decay_constant"]
-        # extrapolating from 't_meas_i' to 't_trans_i'
-        a_t_trans_i, a_t_trans_i_error = extrapolate_radon_activity(
-            dt_extrapolation_s = 0,
-            known_activity_at_dt_known_bq = a_t_meas_i,
-            known_dt_s = dt_trans,
-            known_activity_error_at_dt_known_bq = a_t_meas_i_error,
-            flag_exp_rise_or_decay = ["rise", "decay"][1],
-            lambda_222rn = isotope_dict["rn222"]["decay_constant"])
-        # extrapolating from 't_trans_i' to 'inf'
-        a_ema, a_ema_error = extrapolate_radon_activity(
-            dt_extrapolation_s = "inf",
-            known_activity_at_dt_known_bq = a_t_trans_i,
-            known_dt_s = dt_ema,
-            known_activity_error_at_dt_known_bq = a_t_trans_i_error,
-            flag_exp_rise_or_decay = ["rise", "decay"][0],
-            lambda_222rn = isotope_dict["rn222"]["decay_constant"])
-
-    # writing and returning the 'activity_data_dict'
-    activity_data_dict = {
-        "decay_model_fit_settings" : decay_model_fit_settings_dict,
-        "decay_model_fit_results" : {
-            "po218" : {
-                "window_adcc" : [adcc_selection_window_po218_left, adcc_selection_window_po218_right],
-                "timestamp_centers_seconds" : timestamp_centers_seconds,
-                "decays_per_activity_interval" : decays_per_activity_interval_po218,
-                "decays_per_activity_interval_errors_lower" : decays_per_activity_interval_po218_errors_lower,
-                "decays_per_activity_interval_errors_upper" : decays_per_activity_interval_po218_errors_upper,
-                "n222rn0" : po218_n222rn0,
-                "n218po0" : po218_n218po0,
-                "n214pb0" : po218_n214pb0,
-                "n214bi0" : po218_n214bi0,
-                "r" : po218_r,
-                "n222rn0_error" : po218_n222rn0_error,
-                "n218po0_error" : po218_n218po0_error,
-                "n214pb0_error" : po218_n214pb0_error,
-                "n214bi0_error" : po218_n214bi0_error,
-                "r_error" : po218_r_error
-            },
-            "po214" : {
-                "window_adcc" : [adcc_selection_window_po214_left, adcc_selection_window_po214_right],
-                "timestamp_centers_seconds" : timestamp_centers_seconds,
-                "decays_per_activity_interval" : decays_per_activity_interval_po214,
-                "decays_per_activity_interval_errors_lower" : decays_per_activity_interval_po214_errors_lower,
-                "decays_per_activity_interval_errors_upper" : decays_per_activity_interval_po214_errors_upper,
-                "n222rn0" : po214_n222rn0,
-                "n218po0" : po214_n218po0,
-                "n214pb0" : po214_n214pb0,
-                "n214bi0" : po214_n214bi0,
-                "r" : po214_r,
-                "n222rn0_error" : po214_n222rn0_error,
-                "n218po0_error" : po214_n218po0_error,
-                "n214pb0_error" : po214_n214pb0_error,
-                "n214bi0_error" : po214_n214bi0_error,
-                "r_error" : po214_r_error
-            }
-        },
-        "activity_extrapolation_settings" : activity_extrapolation_settings_dict,
-        "activity_extrapolation" : {
-            "dt_trans_s" : dt_trans,
-            "dt_ema_s" : dt_ema,
-            "a_ema_bq" : a_ema,
-            "a_ema_error_bq" :  a_ema_error,
-        }
-    }
-    return activity_data_dict
 
 
 #    # looping over all viable candidates from analysis list
@@ -1868,92 +2692,105 @@ def get_activity_data_dict(
 
 
 # This function is used to plot the activity data.
-def plot_activity_data(
+def plot_activity_model_fit(
     measurement_data_dict,
     raw_data_ndarray,
-    plot_settings_dict = {
-        "output_pathstrings" : [],
-        "plot_format" : "talk",
-        "x_axis_units" : ["seconds", "radon_half_lives"][1],
-        "x_lim_s" : ["max", [0, 2*24*60*60]][0],
-        "flag_preliminary" : [False, True][1],
-        "legend_kwargs" : {}
-    }
+    # plot stuff
+    plot_aspect_ratio = 9/16,
+    plot_figsize_x_inch = miscfig.standard_figsize_x_inch,
+    plot_x_lim_s = ["max", [0, 12*24*60*60]][0],
+    plot_annotate_comments_dict = {},
+    plot_legend_dict = {},
+    # flags
+    flag_x_axis_units = ["seconds", "radon_half_lives"][1],
+    flag_output_abspath_list = [],
+    flag_comments = [],
+    flag_show = True,
+    flag_errors = [False, "poissonian"][1],
+    #flag_plot_fits = [0,1,2],
+    flag_preliminary = [False, True][0],
 ):
 
     # figure formatting
-    fig, ax1 = plt.subplots(figsize=miscfig.image_format_dict[plot_settings_dict["plot_format"]]["figsize"], dpi=150)
-    if plot_settings_dict["x_lim_s"] == "max":
+    fig, ax1 = plt.subplots(figsize=[plot_figsize_x_inch,plot_figsize_x_inch*plot_aspect_ratio], dpi=150, constrained_layout=True)
+    if plot_x_lim_s == "max" and measurement_data_dict['activity_data_input']["flag_t_meas_ana_s"] == "delta_t_meas":
         xlim = [0,max(raw_data_ndarray["timestamp_ps"])/(10**12)]
+    elif plot_x_lim_s == "max" and measurement_data_dict['activity_data_input']["flag_t_meas_ana_s"] != "delta_t_meas":
+        xlim = [0,measurement_data_dict['activity_data_input']["flag_t_meas_ana_s"]]
     else:
-        xlim = plot_settings_dict["x_lim_s"]
-    if plot_settings_dict["x_axis_units"] == "seconds":
+        xlim = plot_x_lim_s
+    if flag_x_axis_units == "seconds":
         latex_time_unit_string = r"$\mathrm{s}$"
         time_unit_conversion_factor = 1
-    elif plot_settings_dict["x_axis_units"] == "radon_half_lives":
+    elif flag_x_axis_units == "radon_half_lives":
         time_unit_conversion_factor = 1/(isotope_dict["rn222"]["half_life_s"])
-        latex_time_unit_string = r"$T_{\frac{1}{2},\,^{222}\mathrm{Rn}}$"
+        latex_time_unit_string = r"$T^{\mathrm{half}}_{^{222}\mathrm{Rn}}$"
     ax1.set_xlabel(r"time since $t_{\mathrm{meas}}^{\mathrm{i}}$ / " +latex_time_unit_string)
-    ax1.set_ylabel(r"decays detected within $" +f"{measurement_data_dict['activity_data']['decay_model_fit_settings']['activity_interval_ps']/(10**12*60*60):.1f}" +"\,\mathrm{h}$")
+    ax1.set_ylabel(r"decays detected within $" +f"{measurement_data_dict['activity_data_input']['activity_interval_ps']/(10**12*60*60):.1f}" +"\,\mathrm{h}$")
     fit_plot_x_vals_s = np.linspace(start=xlim[0], stop=xlim[1], endpoint=True, num=500)
     xlim = [xlim[0]*time_unit_conversion_factor, xlim[1]*time_unit_conversion_factor]
     ax1.set_xlim(xlim)
 
     # plotting the activity data
     for isotope in ["po218", "po214"]:
-        plt.plot(
-            [ts*time_unit_conversion_factor for ts in measurement_data_dict["activity_data"]["decay_model_fit_results"][isotope]["timestamp_centers_seconds"]],
-            measurement_data_dict["activity_data"]["decay_model_fit_results"][isotope]["decays_per_activity_interval"],
-            linewidth = 1,
-            marker = "o",
+#        plt.plot(
+#            [ts*time_unit_conversion_factor for ts in measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["timestamp_centers_seconds"]],
+#            measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["decays_per_activity_interval"],
+#            linewidth = 1,
+#            marker = "o",
+#            markersize = 3.8,
+#            markerfacecolor = "white",
+#            markeredgewidth = 0.5,
+#            markeredgecolor = isotope_dict[isotope]["color"],
+#            linestyle = "",
+#            alpha = 1,
+#            label = isotope_dict[isotope]["latex_label"] +" (data)",
+#            zorder = 1)
+        plt.errorbar(
+            marker = "o", # plotting just the errorbars
             markersize = 3.8,
             markerfacecolor = "white",
             markeredgewidth = 0.5,
             markeredgecolor = isotope_dict[isotope]["color"],
             linestyle = "",
-            alpha = 1,
-            label = isotope_dict[isotope]["latex_label"] +" (data)",
-            zorder = 1)
-        plt.errorbar(
-            marker = "", # plotting just the errorbars
-            linestyle = "",
             fmt = '',
-            x = [ts*time_unit_conversion_factor for ts in measurement_data_dict["activity_data"]["decay_model_fit_results"][isotope]["timestamp_centers_seconds"]],
-            y = measurement_data_dict["activity_data"]["decay_model_fit_results"][isotope]["decays_per_activity_interval"],
-            yerr = measurement_data_dict["activity_data"]["decay_model_fit_results"][isotope]["decays_per_activity_interval_errors_lower"],
-            xerr = [0.5*measurement_data_dict["activity_data"]["decay_model_fit_settings"]["activity_interval_ps"]*(1/10**12)*time_unit_conversion_factor for ts in measurement_data_dict["activity_data"]["decay_model_fit_results"][isotope]["timestamp_centers_seconds"]],
+            x = [ts*time_unit_conversion_factor for ts in measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["timestamp_centers_seconds"]],
+            y = measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["decays_per_activity_interval"],
+            yerr = measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["decays_per_activity_interval_errors_lower"],
+            xerr = [0.5*measurement_data_dict["activity_data_input"]["activity_interval_ps"]*(1/10**12)*time_unit_conversion_factor for ts in measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["timestamp_centers_seconds"]],
             ecolor = isotope_dict[isotope]["color"],
             elinewidth = 0.5,
             capsize = 1.2,
             barsabove = True,
+            label = isotope_dict[isotope]["latex_label"] +" (data)",
             capthick = 0.5)
 
     # plotting the fits
     for isotope in ["po218", "po214"]:
-        list_of_peaknums_with_a_priori_entries = [peaknum for peaknum in[*measurement_data_dict["peak_data"]] if "a_priori" in [*measurement_data_dict["peak_data"][peaknum]]]
-        peaknum = [a_priori_peaknum for a_priori_peaknum in list_of_peaknums_with_a_priori_entries if measurement_data_dict["peak_data"][a_priori_peaknum]["a_priori"]["isotope"]==isotope][0]
+        peaknum = [keynum for keynum in [*measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"]] if measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"][keynum]==isotope][0]
+
         fit_function = integral_function_po218 if isotope == "po218" else integral_function_po214
         x_vals = [ts*time_unit_conversion_factor for ts in fit_plot_x_vals_s]
         y_vals = fit_function(
             fit_plot_x_vals_s,
-            measurement_data_dict["activity_data"]["decay_model_fit_results"][isotope]["n222rn0"],
-            measurement_data_dict["activity_data"]["decay_model_fit_results"][isotope]["n218po0"],
-            measurement_data_dict["activity_data"]["decay_model_fit_results"][isotope]["n214pb0"],
-            measurement_data_dict["activity_data"]["decay_model_fit_results"][isotope]["n214bi0"],
-            measurement_data_dict["activity_data"]["decay_model_fit_results"][isotope]["r"]
+            measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["n222rn0"],
+            measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["n218po0"],
+            measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["n214pb0"],
+            measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["n214bi0"],
+            measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["r"]
             )
         plt.plot(
             x_vals,
             y_vals,
-            linewidth = 2,
+            linewidth = 2,#measurement_data_dict["peak_data"],
             linestyle = "-",
-            color = isotope_dict[measurement_data_dict["peak_data"][peaknum]["a_priori"]["isotope"]]["color"],
+            color = isotope_dict[isotope]["color"],
             alpha = 1,
-            label = isotope_dict[measurement_data_dict["peak_data"][peaknum]["a_priori"]["isotope"]]["latex_label"] +" (fit)",
+            label = isotope_dict[isotope]["latex_label"] +" (fit)",
             zorder = 30)
 
     # marking as 'preliminary'
-    if plot_settings_dict["flag_preliminary"] == True:
+    if flag_preliminary == True:
         plt.text(
             x = 0.97,
             y = 0.95,
@@ -1964,15 +2801,224 @@ def plot_activity_data(
             verticalalignment = 'center',
             horizontalalignment = 'right')
 
+
+    # annotating comments
+    if flag_comments != []:
+        comment_list = []
+        if "red_chi_square" in flag_comments:
+            comment_list.append(r"$\chi^2_{\mathrm{red}}=" +f"{measurement_data_dict['activity_data_output']['activity_model_fit_results']['reduced_chi_square']:.2f}" +r"$")
+        if "amf_rema_result" in flag_comments:
+            comment_list.append(r"${^{\mathrm{AMF}}R}^{\mathrm{ema}}_{^{222}\mathrm{Rn}}=(" +f"{measurement_data_dict['activity_data_output']['activity_extrapolation']['a_ema_bq']*1000:.2f}" +r"\pm" +f"{measurement_data_dict['activity_data_output']['activity_extrapolation']['a_ema_error_bq']*1000:.2f}" +r")\,\mathrm{mBq}$")
+        annotate_comments(
+            comment_ax = ax1,
+            comment_list = comment_list,
+            **plot_annotate_comments_dict,
+        )
+
+
+    # legend
+    if plot_legend_dict != {}:
+        plt.legend(**plot_legend_dict)
+
+
     # saving the output plot
-    plt.legend(**plot_settings_dict["legend_kwargs"])
-    plt.show()
-    for i in range(len(plot_settings_dict["output_pathstrings"])):
-        fig.savefig(plot_settings_dict["output_pathstrings"][i])
+    if flag_show == True:
+        plt.show()
+    if flag_output_abspath_list != []:
+        for output_abspath in flag_output_abspath_list:
+            fig.savefig(output_abspath)
 
-    # canvas and axes
-    return fig, ax1
+    return
 
+
+
+
+
+#######################################
+### Sensitivity Stuff
+#######################################
+
+
+# This function is utilized to calculate the upper limit 's_up' at C.L. 'cl' for a counting experiment in which 'n_obs' events have been measured with an expected background of 'b' events.
+# For reference have a look at Glen Cowan's CERN talk 'statistics for particle physicists', slide 6
+def calculate_upper_limit_for_counting_experiment(
+    n_obs, # number of observed events, typically an integer
+    b, # mean number of expected background events, can also be float
+    cl = 0.9, # C.L. corresponding to significance alpha
+):
+    s_up = 0.5*chi2.ppf(cl, 2*(n_obs+1), loc=0, scale=1) -b
+    return s_up
+
+
+# This function is use to calculate the expected limit, i.e., the sensitivity, of a counting experiment.
+def calculate_expected_upper_limit_in_n_for_expected_background(
+    n_bkg_expected,
+    confidence_level = 0.90,
+    n_samples = 10**4,
+    random_seed = None,
+):
+    rng = np.random.default_rng(seed=random_seed)
+    poisson_data = rng.poisson(n_bkg_expected, n_samples)
+    upper_limit_data = [calculate_upper_limit_for_counting_experiment(cl=confidence_level, n_obs=pd, b=n_bkg_expected) for pd in poisson_data]
+    mean, lower, upper = get_asymmetric_intervals_around_center_val_for_interpolated_discrete_distribution(
+        distribution_bin_centers = [],
+        distribution_counts = [],
+        distribution_data = upper_limit_data,
+        distribution_center_value = None,
+        interval_width_lower_percent = 0.6827/2,
+        interval_width_upper_percent = 0.6827/2,
+        flag_verbose = False)
+    return mean, lower, upper
+
+
+# This function is use to calculate the expected limit or the emanation rate, i.e., the sensitivity, of the MonXe radon emanation chamber.
+def calculate_expected_upper_limit_in_r_for_expected_background_and_measurement_duration(
+    n_bkg_expected,
+    t_meas_d,
+    confidence_level = 0.90,
+    n_samples = 10**4,
+    random_seed = None,
+):
+    rng = np.random.default_rng(seed=random_seed)
+    poisson_data = rng.poisson(n_bkg_expected, n_samples)
+    upper_limit_data = [
+        isotope_dict["rn222"]["decay_constant"]*get_n222rn0_from_detected_214bi_decays(
+            N = calculate_upper_limit_for_counting_experiment(cl=confidence_level, n_obs=pd, b=n_bkg_expected),
+            tf = t_meas_d*24*60*60,
+            ti = 0,
+            R = 0,
+            n218po0 = 0,
+            n214pb0 = 0,
+            n214bi0 = 0)
+        for pd in poisson_data]
+    mean, lower, upper = get_asymmetric_intervals_around_center_val_for_interpolated_discrete_distribution(
+        distribution_bin_centers = [],
+        distribution_counts = [],
+        distribution_data = upper_limit_data,
+        distribution_center_value = None,
+        interval_width_lower_percent = 0.6827/2,
+        interval_width_upper_percent = 0.6827/2,
+        flag_verbose = False)
+
+    return mean, lower, upper
+
+
+# This function is used to calculate the interval widths around a specified center value of a asymmetrical, discrete, and linearly extrapolated distribution.
+def get_asymmetric_intervals_around_center_val_for_interpolated_discrete_distribution(
+    distribution_bin_centers = [], # bin centers of the input distribution
+    distribution_counts = [], # counts of the input distributions
+    distribution_data = [], # distribution data, give if bin centers and counts are not yet calculated, overwriteds 'distribution_bin_centers' and 'distribution_counts', NOTE: can only contain integer values!
+    distribution_center_value = None, # value around which the intervals are calculated, if None the mean is calculated
+    interval_width_lower_percent = 0.6827/2, # percentage of the data contained within the lower interval width output, default of 0.6827 corresponds to one sigma interval of normal distribution
+    interval_width_upper_percent = 0.6827/2, # percentage of the data contained within the upper interval width output, default of 0.6827 corresponds to one sigma interval of normal distribution
+    ctr_max = 10**6, # maximum number of the safety counter that prevents the program from running in an infinite loop
+    granularity = 100, # granularity of the numeric precision with which the intervals are calculated
+    flag_verbose = False, # flag indicating whether or not text output is given
+):
+
+    # calculating 'distribution_bin_centers' and 'distribution_bin_counts'
+    if distribution_data != []:
+        if flag_verbose: print(f"gaiacvfidd(): 'distribution_data' given")
+        if flag_verbose: print(f"gaiacvfidd(): calculating 'distribution_bin_centers' and 'distribution_bin_counts'")
+        distribution_bin_centers = sorted(list(set(distribution_data)))
+        distribution_counts = []
+        for bin_center in distribution_bin_centers:
+            distribution_counts.append(len([val for val in distribution_data if val==bin_center]))
+        print(f"now distribution bin centers and counts")
+        #print(distribution_bin_centers)
+        print(distribution_counts)
+    # calculating 'distribution_data'
+    else:
+        if flag_verbose: print(f"gaiacvfidd(): 'distribution_data' not given")
+        if flag_verbose: print(f"gaiacvfidd(): calculating 'distribution_data'")
+        distribution_data = []
+        for bc, cts in zip(distribution_bin_centers, distribution_counts):
+            for i in range(cts):
+                distribution_data.append(bc)
+
+    # determining the center value
+    center_val = np.mean(distribution_data) if distribution_center_value == None else distribution_center_value
+    if flag_verbose:
+        print(f"gaiacvfidd(): 'center_val' = {center_val:.4f}")
+
+    # correcting the distribution data for the bin center edges
+    leftmost_bin_center = distribution_bin_centers[0] -1.0*(distribution_bin_centers[1] -distribution_bin_centers[0])
+    rightmost_bin_center = distribution_bin_centers[-1] +1.0*(distribution_bin_centers[-1] -distribution_bin_centers[-2])
+    bin_centers = [leftmost_bin_center] +list(distribution_bin_centers) +[rightmost_bin_center]
+    counts = [0] +list(distribution_counts) +[0]
+
+    # defining the linearly interpolated function
+    def linearly_interpolated_distribution_function(x):
+        f = np.interp(
+            x = x,
+            xp = bin_centers,
+            fp = counts)
+        return f
+
+    # calculating the integral over the interpolated function
+    norm_val = quad(func=linearly_interpolated_distribution_function, a=bin_centers[0], b=bin_centers[-1])[0]
+    if flag_verbose: print(f"gaiacvfidd(): 'norm_val' = {norm_val:.4f}") 
+
+    # calculating the lower interval width
+    if flag_verbose: print(f"gaiacvfidd(): determining lower interval width")
+    ctr = 0
+    interval_width_lower_val = bin_centers[0]
+    interval_width_lower_val_neg = center_val
+    diff = 1
+    # while not not yet precise enough, test 'interval_width_lower_val' values
+    while np.sqrt(diff**2) >= 0.00001 and ctr <= ctr_max:
+        # loop over 'granularity'-many values between 'interval_width_lower_val' and 'interval_width_lower_val_neg' until the difference 'diff' between 'interval_width_lower_percent' and 'integral' becomes smaller than 'precision'
+        # afterwards, set new values for 'interval_width_lower_val' and 'interval_width_lower_val_neg' and evaluate 'diff'
+        if flag_verbose: print(f"\tnow testing interval [{interval_width_lower_val:.12f}, {interval_width_lower_val_neg:.12f}]")
+        for current_interval_width_lower_val in list(np.linspace(start=interval_width_lower_val, stop=interval_width_lower_val_neg, num=granularity, endpoint=True)):
+            integral = quad(
+                func = linearly_interpolated_distribution_function,
+                a = current_interval_width_lower_val,
+                b = center_val,
+                limit = 100)[0]
+            diff = integral -interval_width_lower_percent*norm_val
+            ctr += 1
+            if diff >= 0:
+                interval_width_lower_val = current_interval_width_lower_val
+            else:
+                interval_width_lower_val_neg = current_interval_width_lower_val
+                break
+        if flag_verbose: print(f"\texited 'for' loop with 'ctr' = {ctr}.")
+    # setting the lower interval width according to the calculations above
+    interval_width_lower = center_val -interval_width_lower_val
+    if flag_verbose: print(f"gaiacvfidd(): 'interval_width_lower' = {interval_width_lower:.4f}")
+
+    # calculating the upper interval width
+    if flag_verbose: print(f"gaiacvfidd(): determining upper interval width")
+    ctr = 0
+    interval_width_upper_val = bin_centers[-1]
+    interval_width_upper_val_neg = center_val
+    diff = 1
+    # while not not yet precise enough, test 'interval_width_lower_val' values
+    while np.sqrt(diff**2) >= 0.00001 and ctr <= ctr_max:
+        # loop over 'granularity'-many values between 'interval_width_lower_val' and 'interval_width_lower_val_neg' until the difference 'diff' between 'interval_width_lower_percent' and 'integral' becomes smaller than 'precision'
+        # afterwards, set new values for 'interval_width_lower_val' and 'interval_width_lower_val_neg' and evaluate 'diff'
+        if flag_verbose: print(f"\tnow testing interval [{interval_width_upper_val_neg:.8f}, {interval_width_upper_val:.8f}]")
+        for current_interval_width_upper_val in list(np.linspace(start=interval_width_upper_val, stop=interval_width_upper_val_neg, num=granularity, endpoint=True)):
+            integral = quad(
+                func = linearly_interpolated_distribution_function,
+                a = center_val,
+                b = current_interval_width_upper_val,
+                limit = 100)[0]
+            diff = integral -interval_width_lower_percent*norm_val
+            ctr += 1
+            if diff >= 0:
+                interval_width_upper_val = current_interval_width_upper_val
+            else:
+                interval_width_upper_val_neg = current_interval_width_upper_val
+                break
+        if flag_verbose: print(f"\texited 'for' loop with 'ctr' = {ctr}.")
+    # setting the lower interval width according to the calculations above
+    interval_width_upper = interval_width_upper_val -center_val
+    if flag_verbose: print(f"gaiacvfidd(): 'interval_width_upper' = {interval_width_upper:.4f}")
+
+    # returning
+    return center_val, interval_width_lower, interval_width_upper
 
 
 

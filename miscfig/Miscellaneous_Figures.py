@@ -42,6 +42,11 @@ relpath_output = "./output/"
 # colors
 uni_blue = '#004A9B'
 uni_red = '#C1002A'
+colorstring_citirok1 = "#007990" # ""
+colorstring_citirok2 = "#024e7b" # ""
+colorstring_citirok3 = "#024167" # "blue"
+colorstring_citirok4 = "#1d7968" # "green"
+colorstring_petrol = "#22555e" # randomly color picked
 
 
 colorstring_darwin_blue = '#004A9B'
@@ -954,7 +959,7 @@ def plot_radon_trap(
 
 
 # This function is used to plot a circle.
-def plot_circle(center=(0,0), radius=1, phicoverage=(0,2), linewidth=2, linecolor='cyan', numberofpoints=1000, x1x2=[(0,0),(0,0)], izorder=2, flag_returnpointsinsteadofdrawing=False):
+def plot_circle(center=(0,0), radius=1, phicoverage=(0,2), linewidth=2, linecolor='cyan', numberofpoints=1000, x1x2=[(0,0),(0,0)], izorder=2, flag_returnpointsinsteadofdrawing=True):
     x_list = []
     y_list = []
     # given A: center, radius, phicoverage
@@ -995,7 +1000,7 @@ def plot_circle(center=(0,0), radius=1, phicoverage=(0,2), linewidth=2, linecolo
         for i in range(len(phi_list)):
             x_list.append(radius*(np.cos(phi_list[i]*np.pi))+center[0])
             y_list.append(radius*(np.sin(phi_list[i]*np.pi))+center[1])
-    if flag_returnpointsinsteadofdrawing == False:
+    if flag_returnpointsinsteadofdrawing == True:
         points_list = []
         for i in range(len(x_list)):
             points_list.append((x_list[i], y_list[i]))
@@ -1251,21 +1256,61 @@ def draw_resistor(
     position,
     width,
     height,
+    rot = 0,
     linewidth = 1,
     rotation = 0,
     linecolor = "black",
     fillcolor = "white",
     zorder = 1):
     resistor_box = patches.Rectangle(
-        xy = vs(position, [-0.5*width, -0.5*height]),
-        width = width,
-        height = height,
+        xy = vs(position, [-0.5*width, -0.5*height]) if rot==0 else vs(position, [-0.5*height, -0.5*width]),
+        width = width if rot==0 else height,
+        height = height if rot==0 else width,
         angle = rotation,
         linewidth = linewidth,
         edgecolor = linecolor,
         facecolor = fillcolor,
         zorder = zorder)
     ax.add_patch(resistor_box)
+    return
+
+
+# This function is used to draw a battery symbol onto a matplotlib plot
+def draw_battery(
+    ax,
+    position,
+    width,
+    height,
+    nubsiwidth_rel = 0.18,
+    nubsiheigth_rel = 0.6,
+    linewidth = 1,
+    rotation = 0,
+    linecolor = "black",
+    fillcolor = "white",
+    zorder = 1):
+    # drawing the body
+    battery_body = patches.Rectangle(
+        xy = vs(position, [-0.5*width, -0.5*height]),
+        width = width,
+        height = height,
+        angle = 0,
+        linewidth = linewidth,
+        edgecolor = linecolor,
+        facecolor = fillcolor,
+        zorder = zorder)
+    ax.add_patch(battery_body)
+    # drawing the nubsi
+    nubsi_pos = vs(position, [0.5*width, 0])
+    battery_nubsi = patches.Rectangle(
+        xy = vs(nubsi_pos, [0, -0.5*height*nubsiheigth_rel]),
+        width = width*nubsiwidth_rel,
+        height = height*nubsiheigth_rel,
+        angle = 0,
+        linewidth = linewidth,
+        edgecolor = linecolor,
+        facecolor = fillcolor,
+        zorder = zorder+1)
+    ax.add_patch(battery_nubsi)
     return
 
 
@@ -1304,6 +1349,50 @@ def draw_capacitor(
             linewidth = linewidth,
             zorder = zorder)
     return
+
+
+# This function is used to draw an inductor symbol onto a matplotlib plot.
+def draw_inductor(
+    ax,
+    position,
+    width,
+    height,
+    linewidth,
+    rotation = 0,
+    linecolor = "black",
+    fillcolor = "white",
+    zorder = 3):
+
+    # filling the background
+    background_box = patches.Rectangle(
+        xy = vs(position, [-0.5*width, -0.5*height]),
+        width = width,
+        height = height,
+        angle = rotation,
+        linewidth = 0,
+        edgecolor = fillcolor,
+        facecolor = fillcolor,
+        zorder = zorder)
+    ax.add_patch(background_box)
+    # drawing the inductor semi-circles
+    r = width/8
+    x1 = vs(position, [-3*r, 0])
+    x2 = vs(position, [-1*r, 0])
+    x3 = vs(position, [+1*r, 0])
+    x4 = vs(position, [+3*r, 0])
+    for x in [x1, x2, x3, x4]:
+        plot_circle(
+            center = x,
+            radius = r,
+            phicoverage = (0,1),
+            linewidth = linewidth,
+            linecolor = linecolor,
+            numberofpoints = 600,
+            x1x2=[(0,0),(0,0)],
+            izorder=zorder)
+
+    return
+
 
 
 # This function is used to draw a pin connector onto a plot
@@ -1370,7 +1459,7 @@ def draw_amplifier(
     zorder = 1, 
     label_xoffset_rel = 0.2,
     width_vsupply_rel = 0.3,
-    label_yoffset_rel_vsupply = 0.09,
+    label_yoffset_rel_vsupply = 0.06,
     label_fontsize = 11):
 
     # vertices
@@ -1429,7 +1518,7 @@ def draw_amplifier(
                 linewidth = linewidth,
                 zorder = zorder)
             ax.text(
-                s = r"$V_{\mathrm{cc}}$" if input_pin_pos == pin_vin_upper_pos else r"$V_{\mathrm{ee}}$",
+                s = r"$U_{\mathrm{cc}}$" if input_pin_pos == pin_vin_upper_pos else r"$U_{\mathrm{ee}}$",
                 x = input_pin_pos[0],
                 y = input_pin_pos[1] +label_yoffset_rel_vsupply*height if input_pin_pos == pin_vin_upper_pos else input_pin_pos[1] -label_yoffset_rel_vsupply*height,
                 fontsize = label_fontsize,
@@ -1795,7 +1884,7 @@ def calc_circle_center(x1,x2,rc):
 
 
 # This function is used to plot a circle.
-def plot_circle(center=(0,0), radius=1, phicoverage=(0,2), linewidth=2, linecolor='cyan', numberofpoints=1000, x1x2=[(0,0),(0,0)], izorder=2, flag_return_points_list=False, flag_plot_circle=True):
+def plot_circle_2(center=(0,0), radius=1, phicoverage=(0,2), linewidth=2, linecolor='cyan', numberofpoints=1000, x1x2=[(0,0),(0,0)], izorder=2, flag_return_points_list=False, flag_plot_circle=True):
     x_list = []
     y_list = []
     # given A: center, radius, phicoverage
