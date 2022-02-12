@@ -172,7 +172,7 @@ isotope_dict = {
         "q_value_kev" : 6114.68,
         "alpha_energy_kev" : 6002.35,
         "decay_constant" : np.log(2)/(3.071 *60),
-        "color" : "#005dff", # (https://colordesigner.io/gradient-generator)
+        "color" : "#ab00ff", # (https://colordesigner.io/gradient-generator)
         "latex_label" : r"$^{218}\,\mathrm{Po}$",
     },
     "po216" : {
@@ -190,7 +190,7 @@ isotope_dict = {
         "decay_constant" : np.log(2)/(162.3 *10**(-6)),
         "q_value_kev" : 7833.46,
         "alpha_energy_kev" : 7686.82,
-        "color" : "#ab00ff",
+        "color" : "#f07000",
         "latex_label" : r"$^{214}\,\mathrm{Po}$",
     },
     "po212" : {
@@ -208,8 +208,9 @@ isotope_dict = {
         "q_value_kev" : 5407.45,
         "alpha_energy_kev" : 5304.33,
         "decay_constant" : np.log(2)/(138.3763 *24 *60 *60),
-        "color" : '#e30071',
-        "latex_label" : r"$^{226}\,\mathrm{Ra}$",
+        #"color" : '#e30071',
+        "color" : 'black',
+        "latex_label" : r"$^{210}\,\mathrm{Po}$",
     },
     # lead
     "pb214" : {
@@ -261,6 +262,10 @@ activity_interval_h = 3
 #######################################
 
 
+def detection_efficiency_correction(r_ema, detection_efficiency):
+    return r_ema/detection_efficiency
+
+
 # This function is used to convert a datestring (as I defined it, e.g. '20200731') into a format that can be handled by 'datetime'.
 def mod_datetimestring(input_string):
     y = input_string[2:4]
@@ -277,72 +282,109 @@ def mod_datetimestring(input_string):
 
 
 def error_propagation_for_one_dimensional_function(
-    f,
-    x_mean,
-    x_lower,
-    x_upper,
-    param_dict = {},
-    n_mc = 10**6,
-    n_histogram_bins = 200,
+    function,
+    function_input_dict = {},
+    function_parameter_dict = {},
+    n_mc = 10**5,
+    n_histogram_bins = 150,
     flag_verbose = False,
 ):
     """
     idea:
-        This function is used to calculate the error propagation for a one dimensional real function.
+        This function is used to calculate the error propagation for a one dimensional real function (i.e., $\mathbb{R}^n \rightarrow \mathbb{R}$).
         Therefore MC data is generated according to the (potentially asymmetric) input distribution.
-        This simulation dataset is approximated by a Gaussian distribution with 'n_mc'/2-many events simulated for the lower and upper error intervals, respectively.
-        Afterward, for every simulated x-value the corresponding y-value is computed according to function 'f'.
-        Finally, The left- and right-sided 32% interval of the y-data array is computed and returned as output.
+        This simulation dataset for each input variable is approximated by a Gaussian distribution with 'n_mc'/2-many events simulated for the lower and upper error intervals, respectively.
+        Afterward, for every simulated input variable value the corresponding output function value is computed according to function 'function'.
+        Finally, The left- and right-sided 34% interval of the y-data array is computed and returned as output.
     inputs:
-        f: function to compute the error propagation for
-        param_dict: dictionary, parameters passed on to above function, f(x,**param_dict)
-        x_mean: float,
-        x_lower: float, left-sided 34% error interval
-        x_upper: float, right-sided 34% error interval
-        n_mc: int divisible by 2, size of the MC population
+        'function': function to compute the error propagation for
+        'function_input_dict' : 
+        'param_dict': dictionary, parameters passed on to above function, f(x,**param_dict)
+        'n_mc': int divisible by 2, size of the MC population
+        'n_histogram_bins': int, binning of the function output value histogram that will be used to determine the asymmetric width of the output distribution
     returns:
-        y_mean: float, f(x)
-        y_lower: float, -34% error interval left of f(x)
-        y_upper: float, +34% error interval right of f(x)
+        function_output_mean: float, f(x)
+        function_output_loweruncertainty: float, -34% error interval left of the function output mean value
+        function_output_upperuncertainty: float, +34% error interval right of the function output mean value
     """
-    
+
+    # generating a dict containing all the error-containing keyword inputs that will be passed to the function
+    function_input_list = list(set(["_".join(list(key.split("_"))[:-1]) for key in [*function_input_dict]])) # contains all keywords from 'function_input_dict' without the '_mean', '_loweruncertainty', and '_upperuncertainty' additions, those are the keyword inputs that 'function' requires.
+    if flag_verbose == True: print(function_input_list)
+    function_mc_input_dict = {}
+    for k in function_input_list:
+        function_mc_input_dict.update({k : []})
+    if flag_verbose == True: print(f"epfodf(): 'function_input_list' = {function_input_list}")
+    if flag_verbose == True: print(f"epfodf(): function parameters = {[*function_parameter_dict]}")
+
     # generating MC data by separately generating n_mc/2-many left- and right-sided Gaussian-distributed events
-    x_data_mc = []
     rng = np.random.default_rng(seed=42)
-    while len(x_data_mc) < n_mc/2:
-        left_sided_data_point = rng.normal(x_mean, x_lower, 1)[0]
-        if left_sided_data_point <= x_mean:
-            x_data_mc.append(left_sided_data_point)
-    while len(x_data_mc) < n_mc:
-        right_sided_data_point = rng.normal(x_mean, x_upper, 1)[0]
-        if right_sided_data_point >= x_mean:
-            x_data_mc.append(right_sided_data_point)
-    plt.hist(x_data_mc)
-    plt.show()
+    ctr = 0
+    while ctr < n_mc/2: # generate only 'n_mc'-many MC data points, for every value of 'ctr' one value lower and one value higher than the current mean value are appended to 'function_mc_input_dict'
+        for input_keyword in function_input_list:
+            flag_is_lower_than_mean = False
+            while flag_is_lower_than_mean == False:
+                left_sided_data_point = rng.normal(function_input_dict[input_keyword +"_mean"], function_input_dict[input_keyword +"_loweruncertainty"], 1)[0]
+                if left_sided_data_point <= function_input_dict[input_keyword +"_mean"]:
+                    flag_is_lower_than_mean = True 
+            function_mc_input_dict[input_keyword].append(left_sided_data_point)
+            flag_is_higher_than_mean = False
+            while flag_is_higher_than_mean == False:
+                right_sided_data_point = rng.normal(function_input_dict[input_keyword +"_mean"], function_input_dict[input_keyword +"_upperuncertainty"], 1)[0]
+                if right_sided_data_point >= function_input_dict[input_keyword +"_mean"]:
+                    flag_is_higher_than_mean = True 
+            function_mc_input_dict[input_keyword].append(right_sided_data_point)
+        ctr += 1
+        if flag_verbose == True and ctr % 500 == 0: print(f"epfodf(): generated {2*ctr} MC values to pass into 'function'")
+
+
+    # shuffling the MC data lists of 'function_mc_input_dict' (otherwise function would feed 'n_mc'/2 fully left-fluctuation values and afterwards 'n_mc'/2 right-fluctuating values into function)
+    for kw in [*function_mc_input_dict]:
+        function_mc_input_dict[kw] = random.sample(function_mc_input_dict[kw], len(function_mc_input_dict[kw]))
+    if flag_verbose == True:
+        for kw in [*function_mc_input_dict]:
+            print(f"epfodf(): distribution of '{kw}' function input values")
+            plt.hist(x=function_mc_input_dict[kw], bins=n_histogram_bins)
+            plt.show()
     
-    # computing the function output values for every simulated
-    y_data_computed = []
-    y_mean = f(x_mean, **param_dict)
-    for x_val in x_data_mc:
-        y_val = f(x_val, **param_dict)
-        y_data_computed.append(y_val)
-    plt.hist(y_data_computed)
-    plt.show()
+    # computing the mean function output
+    function_input_mean_dict = {}
+    for kw in function_input_list:
+        function_input_mean_dict.update({kw : function_input_dict[kw +"_mean"]})
+    function_output_mean = function(**function_input_mean_dict, **function_parameter_dict)
+
+    # computing the 'function' MC output values
+    function_output_mc_data = []
+    for i in range(n_mc):
+        function_mc_input_dict_temp = {}
+        for kw in function_input_list:
+            function_mc_input_dict_temp.update({kw : function_mc_input_dict[kw][i]})
+        function_mc_val = function(**function_mc_input_dict_temp, **function_parameter_dict)
+        function_output_mc_data.append(function_mc_val)
+    if flag_verbose == True:
+        print(f"epfodf(): distribution of function MC data")
+        plt.hist(x=function_output_mc_data, bins=n_histogram_bins)
+        plt.show()
         
     # determining the left- and right-sided widths of the distribution
-    y_data_counts, y_data_bin_edges = np.histogram(a=y_data_computed, bins=n_histogram_bins)
+    y_data_counts, y_data_bin_edges = np.histogram(a=function_output_mc_data, bins=n_histogram_bins)
     y_data_bin_centers = [edge +0.5*(y_data_bin_edges[2]-y_data_bin_edges[1]) for edge in y_data_bin_edges[:-1]]
-    y_center, y_lower, y_upper = get_asymmetric_intervals_around_center_val_for_interpolated_discrete_distribution(
+    y_center, function_output_loweruncertainty, function_output_upperuncertainty = get_asymmetric_intervals_around_center_val_for_interpolated_discrete_distribution(
         distribution_bin_centers = y_data_bin_centers,
         distribution_counts = y_data_counts,
-        distribution_center_value = y_mean,
+        distribution_center_value = function_output_mean,
         interval_width_lower_percent = 0.6827/2,
         interval_width_upper_percent = 0.6827/2,
         ctr_max = 10**6,
         granularity = 100,
         flag_verbose = flag_verbose)
     
-    return y_mean, y_lower, y_upper
+    return function_output_mean, function_output_loweruncertainty, function_output_upperuncertainty
+
+
+def calc_detection_efficiency(measurement_val, reference_val):
+    detection_efficiency = measurement_val/reference_val
+    return detection_efficiency
 
 
 def calc_reduced_chi_square(
@@ -440,6 +482,52 @@ def calc_weighted_mean_with_error(
     return [weighted_mean, error]
 
 
+def calc_weighted_mean(**kwargs):
+    """
+    This function is used to calculate the weighted mean for arbitrary many measurements of the same quantity with (potentially) asymmetric errors.
+    inputs:
+        **kwargs: dict, dictionary that contains an arbitrary amount of measurements including their lower and upper uncertainties
+                  The input dict needs to have the following syntax:
+                  measurements = {
+                      "a" : 4.2,
+                      "a_loweruncertaintyparam" : 1.2,
+                      "a_upperuncertaintyparam" : 2.2,
+                      "b" : 4.3,
+                      "b_loweruncertaintyparam" : 0.9,
+                      "b_upperuncertaintyparam" : 2.1,
+                      ...
+                  }
+                  Per measurement, there must be exactly three inputs: The measurement itself, plus its lower and upper uncertainties (denoted with e.g., "_loweruncertainty")
+                  The reason for this is, that you can then just use the function 'error_propagation_for_one_dimensional_function' to calculate the (asymmetric) error of the weighted mean.
+                  Search for '# calculating the combined value of n_rn222_t_meas_i (currently the weighted mean of the po218 and po214 numbers)' to view an example.
+    returns:
+        weighted_mean: float, the weighted mean calculated from all input measurements
+    """
+    
+    # determing the input measurements
+    meas_input_list = list(set([k for k in [*kwargs] if "param" not in k])) # contains all keywords from 'function_input_dict' without the '_mean', '_loweruncertainty', and '_upperuncertainty' additions, those are the keyword inputs that 'function' requires.
+    means_list = []
+    loweruncertainty_list = []
+    upperuncertainty_list = []
+    for k in meas_input_list:
+        means_list.append(kwargs[k])
+        loweruncertainty_list.append(kwargs[k +"_loweruncertaintyparam"])
+        upperuncertainty_list.append(kwargs[k +"_upperuncertaintyparam"])
+        
+    # determining the weights
+    weights_list = []
+    weighted_means_list = []
+    for i in range(len(means_list)):
+        weight = 1/((0.5*(loweruncertainty_list[i] +upperuncertainty_list[i]))**2)
+        weights_list.append(weight)
+        weighted_means_list.append(weight*means_list[i])
+
+    # calculating the weighted mean
+    weighted_mean = np.sum(weighted_means_list)/np.sum(weights_list)
+
+    return weighted_mean
+
+
 # This function is used to calculate the ratio of following Gaussian error propagation.
 def calc_ratio_with_error(numerator, denominator, err_num, err_denom):
     ratio_mean = numerator/denominator
@@ -455,18 +543,6 @@ def function_linear_vec(x, m, t):
         return m*x +t
 
 
-# This function is used to correct an inferred activity measurement for the (separately determined) detection efficiency.
-def error_propagation_a_dividedby_b(
-    a,
-    a_error,
-    b,
-    b_error,
-):
-    res = (1/b) *a
-    res_error = np.sqrt((a_error/b)**2 +((a*b_error)/(b**2))**2)
-    return res, res_error
-
-
 # This function is used to extrapolate the exponential decay/rise in radon activity.
 # asymptotic exponential rise: a(t) = a_ema *(1-exp(-lambda_222rn*dt))
 # exponential decay: a(t) = a_t_0 *exp(-lambda_222rn*dt)
@@ -475,25 +551,25 @@ def extrapolate_radon_activity(
     dt_extrapolation_s, # time delta at which the function chosen below is extrapolated
     known_activity_at_dt_known_bq, # known activity (in Becquerel) at ...
     known_dt_s, # ... known time delta (in seconds)
-    known_activity_error_at_dt_known_bq = 0, # error of known activity at known time
+    #known_activity_error_at_dt_known_bq = 0, # error of known activity at known time
     flag_exp_rise_or_decay = ["rise", "decay"][0], # flag determining wheter to extrapolate exponential rise or decay
     lambda_222rn = isotope_dict["rn222"]["decay_constant"]): # 222rn decay constant
     # exponential decay
     if flag_exp_rise_or_decay == "decay":
         a_t_0 = known_activity_at_dt_known_bq *np.exp(lambda_222rn *known_activity_at_dt_known_bq)
         a_t_1 = a_t_0 *np.exp(-lambda_222rn *dt_extrapolation_s)
-        a_t_1_error = np.exp(lambda_222rn*known_dt_s) *np.exp(-lambda_222rn*dt_extrapolation_s) *known_activity_error_at_dt_known_bq
-        return a_t_1, a_t_1_error
+        #a_t_1_error = np.exp(lambda_222rn*known_dt_s) *np.exp(-lambda_222rn*dt_extrapolation_s) *known_activity_error_at_dt_known_bq
+        return a_t_1
     # asymptotic exponential rise
     elif flag_exp_rise_or_decay == "rise":
         a_ema = known_activity_at_dt_known_bq/(1-np.exp(-lambda_222rn *known_dt_s))
-        a_ema_error = (1/(1-np.exp(-lambda_222rn*known_dt_s))) *known_activity_error_at_dt_known_bq
+        #a_ema_error = (1/(1-np.exp(-lambda_222rn*known_dt_s))) *known_activity_error_at_dt_known_bq
         if dt_extrapolation_s == "inf":
-            return a_ema, a_ema_error
+            return a_ema
         else:
             a_t1 = a_ema *(1-np.exp(-lambda_222rn *dt_extrapolation_s))
-            a_t1_error = a_ema_error *(1-np.exp(-lambda_222rn *dt_extrapolation_s))
-            return a_t1, a_t1_error
+            #a_t1_error = a_ema_error *(1-np.exp(-lambda_222rn *dt_extrapolation_s))
+            return a_t1
 
 
 # This function is used to retrieve a Python3 dictionary stored as a .json file.
@@ -1289,7 +1365,9 @@ def plot_mca_spectrum(
     plot_linewidth = 0.5,
     plot_linecolor = "black",
     plot_labelfontsize = 11,
+    plot_annotate_comments_dict = {},
     # flags
+    flag_comments = [],
     flag_x_axis_units = ["adc_channels", "mev"][0],
     flag_plot_histogram_data_from = ["raw_data_ndarray", "spectrum_data"][0],
     flag_setylogscale = False,
@@ -1298,7 +1376,8 @@ def plot_mca_spectrum(
     flag_errors = [False, "poissonian"][0],
     flag_plot_fits = [], # list of fits to be plotted, given in peak numbers
     flag_preliminary = [False, True][0],
-    flag_show_isotope_windows = [False,True][1],
+    flag_show_peak_labels = [False, True][0],
+    flag_show_isotope_windows = [False,True][0],
 ):
 
     # canvas
@@ -1360,7 +1439,7 @@ def plot_mca_spectrum(
             plt.plot(
                 x_data,
                 [function_crystal_ball_one(x_data_adc_val, **measurement_data_dict["spectrum_data_output"]["peak_fits"][peaknum]["fit_data"]) for x_data_adc_val in x_data_adc],
-                linewidth = 1.5,
+                linewidth = 1.2,
                 color = isotope_dict[measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"][peaknum]]["color"] if peaknum in [*measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"]] else "red",
                 linestyle = '-',
                 zorder = 1,
@@ -1389,17 +1468,17 @@ def plot_mca_spectrum(
 #    #    zoom=0.02,
 #    #    zorder=0)
 #    # peak labels
-#    if flag_show_peak_labels == True:
-#        for peaknum in known_peaks:
-#            plt.text(
-#                x = measurement_data_dict["spectrum_data_output"][peaknum]["fit_data"]["mu"] -0.02*x_width if flag_x_axis_units=="adc_channels" else energy_channel_relation(measurement_data_dict["spectrum_data_output"][peaknum]["fit_data"]["mu"] -0.02*x_width, *p_opt),
-#                y = 1.02*function_crystal_ball_one(x=measurement_data_dict["spectrum_data_output"][peaknum]["fit_data"]["mu"], **measurement_data_dict["spectrum_data_output"][peaknum]["fit_data"]),
-#                #transform = ax1.transAxes,
-#                s = r"$" +isotope_dict[measurement_data_dict["spectrum_data_input"][peaknum]["a_priori"]["isotope"]]["latex_label"] +r"$",
-#                color = "black",
-#                fontsize = 11,
-#                verticalalignment = 'center',
-#                horizontalalignment = 'right')
+    if flag_show_peak_labels == True:
+        for peaknum in [*measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"]]:
+            plt.text(
+                x = measurement_data_dict["spectrum_data_output"]["peak_fits"][peaknum]["fit_data"]["mu"] if flag_x_axis_units=="adc_channels" else function_linear_vec(x=measurement_data_dict["spectrum_data_output"]["peak_fits"][peaknum]["fit_data"]["mu"], **measurement_data_dict["spectrum_data_output"]["energy_channel_relation_fit"]["fit_data"]),
+                y = 1.02*function_crystal_ball_one(x=measurement_data_dict["spectrum_data_output"]["peak_fits"][peaknum]["fit_data"]["mu"], **measurement_data_dict["spectrum_data_output"]["peak_fits"][peaknum]["fit_data"]),
+                #transform = ax1.transAxes,
+                s = r"$" +isotope_dict[measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"][peaknum]]["latex_label"] +r"$",
+                color = isotope_dict[measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"][peaknum]]["color"],
+                fontsize = 11,
+                verticalalignment = 'bottom',
+                horizontalalignment = 'right')
 #    # shading the fit region
 #    #ax1.axvspan(
 #    #    fitrange[0] if flag_x_axis_units=="adc_channels" else energy_channel_relation(fitrange[0], *p_opt),
@@ -1415,10 +1494,47 @@ def plot_mca_spectrum(
             ax1.axvspan(
                 isotope_window_adcc[0] if flag_x_axis_units == "adc_channels" else function_linear_vec(x=[isotope_window_adcc[0]], m=measurement_data_dict["spectrum_data_output"]["energy_channel_relation_fit"]["fit_data"]["m"], t=measurement_data_dict["spectrum_data_output"]["energy_channel_relation_fit"]["fit_data"]["t"])[0],
                 isotope_window_adcc[1] if flag_x_axis_units == "adc_channels" else function_linear_vec(x=[isotope_window_adcc[1]], m=measurement_data_dict["spectrum_data_output"]["energy_channel_relation_fit"]["fit_data"]["m"], t=measurement_data_dict["spectrum_data_output"]["energy_channel_relation_fit"]["fit_data"]["t"])[0],
-                alpha = 0.5,
+                alpha = 0.3,
                 linewidth = 0,
                 color = isotope_dict[peak]["color"],
                 zorder = -50)
+
+    # annotating comments
+    if flag_comments != []:
+        comment_list = []
+        if "delta_t_ema" in flag_comments:
+            comment_list.append(r"$\Delta t_{\mathrm{ema}}=" +f"{measurement_data_dict['activity_data_output']['activity_extrapolation']['delta_t_ema_s']/(60*60*24):.1f}" +r"\,\mathrm{d}$")
+        if "delta_t_trans" in flag_comments:
+            comment_list.append(r"$\Delta t_{\mathrm{trans}}=" +f"{measurement_data_dict['activity_data_output']['activity_extrapolation']['delta_t_trans_s']/(60*60):.1f}" +r"\,\mathrm{h}$")
+        if "delta_t_meas" in flag_comments:
+            comment_list.append(r"$\Delta t_{\mathrm{meas}}=" +f"{measurement_data_dict['activity_data_output']['activity_extrapolation']['delta_t_meas_s']/(60*60*24):.1f}" +r"\,\mathrm{d}$")
+        if "delta_t_meas_eff" in flag_comments and "activity_data_input" in [*measurement_data_dict]:
+            if measurement_data_dict["activity_data_input"]["delta_t_meas_window_s"][1] == "t_meas_f":
+                delta_t_meas_eff = measurement_data_dict['activity_data_output']['activity_extrapolation']['delta_t_meas_s']
+            elif type(measurement_data_dict["activity_data_input"]["delta_t_meas_window_s"][1]) in [int,float]:
+                delta_t_meas_eff = measurement_data_dict["activity_data_input"]["delta_t_meas_window_s"][1] -measurement_data_dict["activity_data_input"]["delta_t_meas_window_s"][0]
+            comment_list.append(r"$\Delta t_{\mathrm{meas}}=" +f"{delta_t_meas_eff/(60*60*24):.1f}" +r"\,\mathrm{d}$")
+        if "n_meas" in flag_comments:
+            comment_list.append(r"$n^{\mathrm{meas}}_{^{218}\mathrm{Po}}=" +f"{measurement_data_dict['activity_data_output']['miscellaneous']['n_meas_po218']:.1f}" +r",\,n^{\mathrm{meas}}_{^{214}\mathrm{Po}}=" +f"{measurement_data_dict['activity_data_output']['miscellaneous'][n_meas_po214]:.1f}" +r"$")            
+        if "n_bkg_expected" in flag_comments:
+            comment_list.append(r"$\bar{n}^{\mathrm{bkg}}_{^{218}\mathrm{Po}}=" +f"{measurement_data_dict['activity_data_output']['miscellaneous']['n_bkg_expected_po218']:.1f}" +r",\,\bar{n}^{\mathrm{bkg}}_{^{214}\mathrm{Po}}=" +f"{measurement_data_dict['activity_data_output']['miscellaneous']['n_bkg_expected_po214']:.1f}" +r"$")            
+        if "n_sig" in flag_comments:
+            comment_list.append(r"$\bar{n}^{\mathrm{sig}}_{^{218}\mathrm{Po}}=" +f"{measurement_data_dict['activity_data_output']['miscellaneous']['n_sig_po218']:.1f}" +r",\,\bar{n}^{\mathrm{sig}}_{^{214}\mathrm{Po}}=" +f"{measurement_data_dict['activity_data_output']['miscellaneous']['n_sig_po214']:.1f}" +r"$")            
+        if "detection_efficiency" in flag_comments:
+            comment_list.append(r"$\varepsilon^{\mathrm{det}}=(" +f"{measurement_data_dict['activity_data_input']['detection_efficiency_mean']*100:.2f}" +r"_{-" +f"{measurement_data_dict['activity_data_input']['detection_efficiency_loweruncertainty']*100:.2f}" +r"}^{+" +f"{measurement_data_dict['activity_data_input']['detection_efficiency_upperuncertainty']*100:.2f}" +r"})\,\mathrm{mBq}$")            
+        if "resolution_po214" in flag_comments:
+            resolution_po214 = 2*np.sqrt(2*np.log(2)) *measurement_data_dict['spectrum_data_output']['peak_fits']["1"]["fit_data"]["sigma"]/measurement_data_dict['spectrum_data_output']['peak_fits']["1"]["fit_data"]["mu"]
+            comment_list.append(r"$\mathrm{res}^{\mathrm{FWHM}}_{^{214}\mathrm{Po}}=" +f"{100*resolution_po214:.1f}" +r"\,\%$")
+        if "bc_rema_result" in flag_comments and "activity_data_output" in [*measurement_data_dict]:
+            comment_list.append(r"${^{\mathrm{BC}}R}^{\mathrm{ema}}_{^{222}\mathrm{Rn}}=(" +f"{measurement_data_dict['activity_data_output']['activity_extrapolation']['r_ema_mean_bq']*1000:.1f}" +r"_{-" +f"{measurement_data_dict['activity_data_output']['activity_extrapolation']['r_ema_loweruncertainty_bq']*1000:.1f}" +r"}^{+" +f"{measurement_data_dict['activity_data_output']['activity_extrapolation']['r_ema_upperuncertainty_bq']*1000:.1f}" +r"})\,\mathrm{mBq}$")
+        if "amf_rema_result" in flag_comments and "activity_data_output" in [*measurement_data_dict]:
+            comment_list.append(r"${^{\mathrm{AMF}}R}^{\mathrm{ema}}_{^{222}\mathrm{Rn}}=(" +f"{measurement_data_dict['activity_data_output']['activity_extrapolation']['r_ema_mean_bq']*1000:.1f}" +r"_{-" +f"{measurement_data_dict['activity_data_output']['activity_extrapolation']['r_ema_loweruncertainty_bq']*1000:.1f}" +r"}^{+" +f"{measurement_data_dict['activity_data_output']['activity_extrapolation']['r_ema_upperuncertainty_bq']*1000:.1f}" +r"})\,\mathrm{mBq}$")
+        annotate_comments(
+            comment_ax = ax1,
+            comment_list = comment_list,
+            **plot_annotate_comments_dict,
+        )
+
 #    # measurement comments
 #    #monxeana.annotate_comments(
 #    #    comment_ax = ax1,
@@ -1554,7 +1670,7 @@ def annotate_comments(
             color = comment_textcolor if type(comment_textcolor)==str else comment_textcolor[i],
             rotation = 0,
             horizontalalignment = "left" if comment_textpos[0] < 0.5 else "right",
-            verticalalignment = "bottom" if comment_textpos[1] < 0.5 else "top",
+            verticalalignment = "top",
             transform = comment_ax.transAxes
         )
         ctr_textpos += 1
@@ -1562,24 +1678,32 @@ def annotate_comments(
     return
 
 
-# This function is used to extract the 'activity_data_dict' from 'raw_data' and 'measurement_data'.
+# This function is used to extract the 'activity_data_output_dict' from 'raw_data' and 'measurement_data'.
 def get_activity_data_output_dict(
     measurement_data_dict,
     raw_data_ndarray,
 ):
 
     ### profile: 'polonium_activity_fit'
-    if measurement_data_dict["activity_data_input"]["flag_activity_data"] == "polonium_activity_fit":
+    if measurement_data_dict["activity_data_input"]["flag_activity_data"] == "activity_model_fit":
 
-        # analysis preparation
-        timestamp_edges_ps = [0]
-        timestamp_ctr = 1
-        if measurement_data_dict["activity_data_input"]["flag_t_meas_ana_s"] == "delta_t_meas":
+        # determining the measurement time window to be considered for the activity model fit
+        if measurement_data_dict["activity_data_input"]["flag_verbose"] == True: print(f"get_activity_data_output_dict(): determining the measurement time window")
+        if measurement_data_dict["activity_data_input"]["delta_t_meas_window_s"][1] == "t_meas_f":
             t_max_ps = max(raw_data_ndarray["timestamp_ps"])
-        elif measurement_data_dict["activity_data_input"]["flag_t_meas_ana_s"] != "delta_t_meas":
-            t_max_ps = measurement_data_dict["activity_data_input"]["flag_t_meas_ana_s"] *(10**12)
+        elif type(measurement_data_dict["activity_data_input"]["delta_t_meas_window_s"][1]) in [int,float]:
+            t_max_ps = measurement_data_dict["activity_data_input"]["delta_t_meas_window_s"][1] *(10**12)
+        if measurement_data_dict["activity_data_input"]["delta_t_meas_window_s"][0] == 0:
+            t_min_ps = 0
+        elif type(measurement_data_dict["activity_data_input"]["delta_t_meas_window_s"][0]) in [int,float]:
+            t_min_ps = measurement_data_dict["activity_data_input"]["delta_t_meas_window_s"][0] *(10**12)
+
+        # calculating the time edges during which the detected events are counted
+        if measurement_data_dict["activity_data_input"]["flag_verbose"] == True: print(f"get_activity_data_output_dict(): calculating the time edges during which the detected events are counted")
+        timestamp_edges_ps = [t_min_ps]
+        timestamp_ctr = 1
         while timestamp_edges_ps[len(timestamp_edges_ps)-1] +measurement_data_dict["activity_data_input"]["activity_interval_ps"] < t_max_ps:
-            timestamp_edges_ps.append(measurement_data_dict["activity_data_input"]["activity_interval_ps"]*timestamp_ctr)
+            timestamp_edges_ps.append(measurement_data_dict["activity_data_input"]["activity_interval_ps"]*timestamp_ctr +t_min_ps)
             timestamp_ctr += 1
         timestamp_centers_ps = [i +0.5*measurement_data_dict["activity_data_input"]["activity_interval_ps"] for i in timestamp_edges_ps[:-1]]
         timestamp_centers_seconds = [i/(1000**4) for i in timestamp_centers_ps]
@@ -1593,6 +1717,7 @@ def get_activity_data_output_dict(
         decays_per_activity_interval_po214_errors_upper = []
 
         # determining the adcc selection windows for the individual peaks
+        if measurement_data_dict["activity_data_input"]["flag_verbose"] == True: print(f"get_activity_data_output_dict(): determining the adcc selection windows")
         if measurement_data_dict["activity_data_input"]["flag_calibration"] not in ["self_absolute_adcc", "self_relative_adcc", "self_relative_sigma"]:
             print(f"include calibration by external file here")
         else:
@@ -1615,6 +1740,7 @@ def get_activity_data_output_dict(
                 adcc_selection_window_po214_right = measurement_data_dict["spectrum_data_output"]["peak_fits"][po214_peaknum]["fit_data"]["mu"] +(measurement_data_dict["activity_data_input"]["po214_window"][1] *measurement_data_dict["spectrum_data_output"]["peak_fits"][po214_peaknum]["fit_data"]["sigma"])
 
         # determining the detected po218 and po214 decays per 'activity_interval_ps'
+        if measurement_data_dict["activity_data_input"]["flag_verbose"] == True: print(f"get_activity_data_output_dict(): determining the detected po218 and po214 decays per 'activity_interval_ps'")
         for i in range(len(timestamp_edges_ps)-1):
             decays_per_activity_interval_po218.append(len(raw_data_ndarray[
                 (raw_data_ndarray["timestamp_ps"] >= timestamp_edges_ps[i]) &
@@ -1631,8 +1757,11 @@ def get_activity_data_output_dict(
             decays_per_activity_interval_po218_errors_upper.append(calc_poissonian_error(number_of_counts=decays_per_activity_interval_po218[i], flag_mode=measurement_data_dict["activity_data_input"]["flag_errors"])[1])
             decays_per_activity_interval_po214_errors_lower.append(calc_poissonian_error(number_of_counts=decays_per_activity_interval_po214[i], flag_mode=measurement_data_dict["activity_data_input"]["flag_errors"])[0])
             decays_per_activity_interval_po214_errors_upper.append(calc_poissonian_error(number_of_counts=decays_per_activity_interval_po214[i], flag_mode=measurement_data_dict["activity_data_input"]["flag_errors"])[1])
+            decays_per_activity_interval_po218_mean_errors = [0.5*(decays_per_activity_interval_po218_errors_lower[i] +decays_per_activity_interval_po218_errors_upper[i]) for i in range(len(decays_per_activity_interval_po218_errors_lower))]
+            decays_per_activity_interval_po214_mean_errors = [0.5*(decays_per_activity_interval_po214_errors_lower[i] +decays_per_activity_interval_po214_errors_upper[i]) for i in range(len(decays_per_activity_interval_po214_errors_lower))]
 
-        # model fit
+        # activity model fit
+        if measurement_data_dict["activity_data_input"]["flag_verbose"] == True: print(f"get_activity_data_output_dict(): activity model fit")
         if measurement_data_dict["activity_data_input"]["flag_model_fit"] == "fit_po218_and_po214_independently":
             print(f"This still needs to be implemented")
         elif measurement_data_dict["activity_data_input"]["flag_model_fit"] == "fit_po218_and_po214_simultaneously":
@@ -1647,7 +1776,7 @@ def get_activity_data_output_dict(
                 f =  constrained_fit_function,
                 xdata = timestamp_centers_seconds +timestamp_centers_seconds,
                 ydata = decays_per_activity_interval_po218 +decays_per_activity_interval_po214,
-                sigma = decays_per_activity_interval_po218_errors_upper +decays_per_activity_interval_po214_errors_upper,
+                sigma = decays_per_activity_interval_po218_mean_errors +decays_per_activity_interval_po214_mean_errors, # NOTE: at some point one would probably like to implement a fit function (instead of curve_fit) that also respects asymmetric errors, so far I am using the artihmetic mean of both errors
                 absolute_sigma = True,
                 bounds = measurement_data_dict["activity_data_input"]["p_opt_bounds"],
                 p0 = measurement_data_dict["activity_data_input"]["p_opt_guess"])
@@ -1675,51 +1804,87 @@ def get_activity_data_output_dict(
             po214_r_error = p_err[4]
 
         # extrapolating the equilibrium emanation activity
+        if measurement_data_dict["activity_data_input"]["flag_verbose"] == True: print(f"get_activity_data_output_dict(): extrapolating the equilibrium emanation activity")
         if measurement_data_dict["activity_data_input"]["flag_activity_extrapolation"] == False:
             dt_trans = "NA"
             dt_ema = "NA"
             a_ema = "NA"
-            a_ema_error ="NA" 
+            #a_ema_error ="NA" 
         elif measurement_data_dict["activity_data_input"]["flag_activity_extrapolation"] in ["default"]:
             # retrieving the relevant times from the ELOG timestamps
             t_ema_i = measurement_data_dict[key_measurement_information]["t_ema_i"]
             t_trans_i = measurement_data_dict[key_measurement_information]["t_trans_i"]
             t_meas_i = measurement_data_dict[key_measurement_information]["t_meas_i"]
+            t_meas_f = measurement_data_dict[key_measurement_information]["t_meas_f"]
             # calculating the relevant time deltas
-            #dt_meas = (timestamp_conversion(t_meas_f)-timestamp_conversion(t_meas_i)).total_seconds()
+            dt_meas = (timestamp_conversion(t_meas_f)-timestamp_conversion(t_meas_i)).total_seconds()
             dt_ema = (timestamp_conversion(t_trans_i)-timestamp_conversion(t_ema_i)).total_seconds()
             dt_trans = (timestamp_conversion(t_meas_i)-timestamp_conversion(t_trans_i)).total_seconds()
             # calculating the activities
             a_t_meas_i = po214_n222rn0 *isotope_dict["rn222"]["decay_constant"]
-            a_t_meas_i_error = po214_n222rn0_error *isotope_dict["rn222"]["decay_constant"]
-            # extrapolating from 't_meas_i' to 't_trans_i'
-            a_t_trans_i, a_t_trans_i_error = extrapolate_radon_activity(
-                dt_extrapolation_s = 0,
-                known_activity_at_dt_known_bq = a_t_meas_i,
-                known_dt_s = dt_trans,
-                known_activity_error_at_dt_known_bq = a_t_meas_i_error,
-                flag_exp_rise_or_decay = ["rise", "decay"][1],
-                lambda_222rn = isotope_dict["rn222"]["decay_constant"])
-            # extrapolating from 't_trans_i' to 'inf'
-            a_ema, a_ema_error = extrapolate_radon_activity(
-                dt_extrapolation_s = "inf",
-                known_activity_at_dt_known_bq = a_t_trans_i,
-                known_dt_s = dt_ema,
-                known_activity_error_at_dt_known_bq = a_t_trans_i_error,
-                flag_exp_rise_or_decay = ["rise", "decay"][0],
-                lambda_222rn = isotope_dict["rn222"]["decay_constant"])
+            a_t_meas_i_uncertainty = po214_n222rn0_error *isotope_dict["rn222"]["decay_constant"]
 
+            # extrapolating the radon activity from 't_meas_i' to 't_trans_i'
+            a_t_trans_i_mean, a_t_trans_i_loweruncertainty, a_t_trans_i_upperuncertainty = error_propagation_for_one_dimensional_function(
+                function = extrapolate_radon_activity,
+                function_input_dict = {
+                    "known_activity_at_dt_known_bq_mean" : a_t_meas_i,
+                    "known_activity_at_dt_known_bq_loweruncertainty" : a_t_meas_i_uncertainty,
+                    "known_activity_at_dt_known_bq_upperuncertainty" : a_t_meas_i_uncertainty,
+                },
+                function_parameter_dict = {
+                    "flag_exp_rise_or_decay" : ["rise", "decay"][1],
+                    "lambda_222rn" : isotope_dict["rn222"]["decay_constant"],
+                    "known_dt_s" : dt_trans,
+                    "dt_extrapolation_s" : 0,
+                },
+                n_mc = 10**5,
+                n_histogram_bins = 150,
+                flag_verbose = measurement_data_dict["activity_data_input"]["flag_verbose"])
+
+            # extrapolating the radon activity from 't_trans_i' to 'inf'
+            a_ema_withoutdeteffcorr_mean, a_ema_withoutdeteffcorr_loweruncertainty, a_ema_withoutdeteffcorr_upperuncertainty = error_propagation_for_one_dimensional_function(
+                function = extrapolate_radon_activity,
+                function_input_dict = {
+                    "known_activity_at_dt_known_bq_mean" : a_t_trans_i_mean,
+                    "known_activity_at_dt_known_bq_loweruncertainty" : a_t_trans_i_loweruncertainty,
+                    "known_activity_at_dt_known_bq_upperuncertainty" : a_t_trans_i_upperuncertainty,
+                },
+                function_parameter_dict = {
+                    "flag_exp_rise_or_decay" : ["rise", "decay"][0],
+                    "lambda_222rn" : isotope_dict["rn222"]["decay_constant"],
+                    "known_dt_s" : dt_ema,
+                    "dt_extrapolation_s" : "inf",
+                },
+                n_mc = 10**5,
+                n_histogram_bins = 150,
+                flag_verbose = measurement_data_dict["activity_data_input"]["flag_verbose"])
 
         # detection efficiency correction
-        if "detection_efficiency" in [*measurement_data_dict["activity_data_input"]]:
-            a_ema, a_ema_error = error_propagation_a_dividedby_b(
-                a = a_ema,
-                a_error = a_ema_error,
-                b = measurement_data_dict["activity_data_input"]["detection_efficiency"],
-                b_error = measurement_data_dict["activity_data_input"]["detection_efficiency_error"])
+        if measurement_data_dict["activity_data_input"]["flag_verbose"] == True: print(f"get_activity_data_output_dict(): detection efficiency correction")
+        if measurement_data_dict["activity_data_input"]["detection_efficiency_mean"] != 1:
+            r_ema_mean, r_ema_loweruncertainty, r_ema_upperuncertainty = error_propagation_for_one_dimensional_function(
+                function = detection_efficiency_correction,
+                function_input_dict = {
+                    "r_ema_mean" : a_ema_withoutdeteffcorr_mean,
+                    "r_ema_loweruncertainty" : a_ema_withoutdeteffcorr_loweruncertainty,
+                    "r_ema_upperuncertainty" : a_ema_withoutdeteffcorr_upperuncertainty,
+                    "detection_efficiency_mean" : measurement_data_dict["activity_data_input"]["detection_efficiency_mean"],
+                    "detection_efficiency_loweruncertainty" : measurement_data_dict["activity_data_input"]["detection_efficiency_loweruncertainty"],
+                    "detection_efficiency_upperuncertainty" : measurement_data_dict["activity_data_input"]["detection_efficiency_upperuncertainty"],
+                },
+                function_parameter_dict = {},
+                n_mc = 10**5,
+                n_histogram_bins = 150,
+                flag_verbose = measurement_data_dict["activity_data_input"]["flag_verbose"])
+        else:
+            r_ema_mean = a_ema_withoutdeteffcorr_mean
+            r_ema_loweruncertainty = a_ema_withoutdeteffcorr_loweruncertainty
+            r_ema_upperuncertainty = a_ema_withoutdeteffcorr_upperuncertainty
 
 
         # chi square test
+        if measurement_data_dict["activity_data_input"]["flag_verbose"] == True: print(f"get_activity_data_output_dict(): chi square test")
         decays_per_activity_interval_po218_expected = integral_function_po218(timestamp_centers_seconds, po218_n222rn0, po218_n218po0, po218_n214pb0, po218_n214bi0, po218_r)
         decays_per_activity_interval_po214_expected = integral_function_po214(timestamp_centers_seconds, po214_n222rn0, po214_n218po0, po214_n214pb0, po214_n214bi0, po214_r)
         if measurement_data_dict["activity_data_input"]["flag_calculate_chi_square"] == True:
@@ -1738,6 +1903,7 @@ def get_activity_data_output_dict(
 
 
         # writing and returning the 'activity_data_dict'
+        if measurement_data_dict["activity_data_input"]["flag_verbose"] == True: print(f"get_activity_data_output_dict(): writing the 'activity_data_dict'")
         activity_data_output_dict = {
             "event_extraction" : {
                 "po218_adcc_window" : [adcc_selection_window_po218_left, adcc_selection_window_po218_right],
@@ -1783,17 +1949,20 @@ def get_activity_data_output_dict(
                 }
             },
             "activity_extrapolation" : {
-                "dt_trans_s" : dt_trans,
-                "dt_ema_s" : dt_ema,
-                "a_ema_bq" : a_ema,
-                "a_ema_error_bq" :  a_ema_error,
+                "delta_t_trans_s" : dt_trans,
+                "delta_t_ema_s" : dt_ema,
+                "delta_t_meas_s" : dt_meas,
+                "r_ema_mean_bq" : r_ema_mean,
+                "r_ema_loweruncertainty_bq" :  r_ema_loweruncertainty,
+                "r_ema_upperuncertainty_bq" :  r_ema_upperuncertainty,
             },
         }
 
     ### profile: 'polonium_activity_fit'
-    elif "box_counting" in measurement_data_dict["activity_data_input"]["flag_activity_data"]:
+    elif measurement_data_dict["activity_data_input"]["flag_activity_data"] == "box_counting":
 
         # determining the adcc selection windows for the individual peaks
+        if measurement_data_dict["activity_data_input"]["flag_verbose"] == True: print(f"get_activity_data_output_dict(): determining the adcc selection windows for the individual peaks")
         if measurement_data_dict["activity_data_input"]["flag_calibration"] not in ["self_absolute_adcc", "self_relative_adcc", "self_relative_sigma"]:
             print(f"include calibration by external file here")
         else:
@@ -1815,11 +1984,15 @@ def get_activity_data_output_dict(
                 adcc_selection_window_po214_left = measurement_data_dict["spectrum_data_output"]["peak_fits"][po214_peaknum]["fit_data"]["mu"] -(measurement_data_dict["activity_data_input"]["po214_window"][0] *measurement_data_dict["spectrum_data_output"]["peak_fits"][po214_peaknum]["fit_data"]["sigma"])
                 adcc_selection_window_po214_right = measurement_data_dict["spectrum_data_output"]["peak_fits"][po214_peaknum]["fit_data"]["mu"] +(measurement_data_dict["activity_data_input"]["po214_window"][1] *measurement_data_dict["spectrum_data_output"]["peak_fits"][po214_peaknum]["fit_data"]["sigma"])
 
-        # determining the detected po218 and po214 decays within the measurement time
-        if measurement_data_dict["activity_data_input"]["flag_t_meas_ana_s"] == "delta_t_meas":
+        # determining the measurement time window to be considered for the activity model fit
+        if measurement_data_dict["activity_data_input"]["flag_verbose"] == True: print(f"get_activity_data_output_dict(): determining the measurement time window")
+        if measurement_data_dict["activity_data_input"]["delta_t_meas_window_s"][1] == "t_meas_f":
             t_max_ps = max(raw_data_ndarray["timestamp_ps"])
-        elif measurement_data_dict["activity_data_input"]["flag_t_meas_ana_s"] != "delta_t_meas":
-            t_max_ps = measurement_data_dict["activity_data_input"]["flag_t_meas_ana_s"] *(10**12)
+        elif type(measurement_data_dict["activity_data_input"]["delta_t_meas_window_s"][1]) in [int,float]:
+            t_max_ps = measurement_data_dict["activity_data_input"]["delta_t_meas_window_s"][1] *(10**12)
+
+        # determining the detected po218 and po214 decays within the measurement time
+        if measurement_data_dict["activity_data_input"]["flag_verbose"] == True: print(f"get_activity_data_output_dict(): determining the detected po218 and po214 decays within the measurement time")
         time_window_ps = [0,t_max_ps]
         n_meas_po218 = len(raw_data_ndarray[
             (raw_data_ndarray["timestamp_ps"] >= time_window_ps[0]) &
@@ -1832,8 +2005,8 @@ def get_activity_data_output_dict(
             (raw_data_ndarray["pulse_height_adc"] >= adcc_selection_window_po214_left) &
             (raw_data_ndarray["pulse_height_adc"] <= adcc_selection_window_po214_right)])
 
-
         # calculating the number of background events
+        if measurement_data_dict["activity_data_input"]["flag_verbose"] == True: print(f"get_activity_data_output_dict(): calculating the number of background events")
         n_bkg_expected_po218 = calc_number_of_expected_background_events(
             input_t_meas_f_ps = time_window_ps[1],
             adc_window = [adcc_selection_window_po218_left, adcc_selection_window_po218_right],
@@ -1843,120 +2016,205 @@ def get_activity_data_output_dict(
             adc_window = [adcc_selection_window_po214_left, adcc_selection_window_po214_right],
             background_measurements_abspath_list = measurement_data_dict["activity_data_input"]["background_measurements_list"])
 
-
         # calculating the number of actual signal events        
-        n_sig_po218, n_sig_po218_lower, n_sig_po218_upper = calc_number_of_signal_events(n_meas=n_meas_po218, n_bkg_expected=n_bkg_expected_po218)
-        n_sig_po214, n_sig_po214_lower, n_sig_po214_upper = calc_number_of_signal_events(n_meas=n_meas_po214, n_bkg_expected=n_bkg_expected_po214)
-
+        if measurement_data_dict["activity_data_input"]["flag_verbose"] == True: print(f"get_activity_data_output_dict(): calculating the number of actual signal events")
+        n_sig_po218_mean, n_sig_po218_loweruncertainty, n_sig_po218_upperuncertainty = calc_number_of_signal_events(n_meas=n_meas_po218, n_bkg_expected=n_bkg_expected_po218, flag_verbose=measurement_data_dict["activity_data_input"]["flag_verbose"])
+        n_sig_po214_mean, n_sig_po214_loweruncertainty, n_sig_po214_upperuncertainty = calc_number_of_signal_events(n_meas=n_meas_po214, n_bkg_expected=n_bkg_expected_po214, flag_verbose=measurement_data_dict["activity_data_input"]["flag_verbose"])
 
         # calculating the number of rn222 atoms present in the detection vessel at t_meas_i
-        n_rn222_at_t_meas_i_from_po218, n_rn222_at_t_meas_i_from_po218_lower, n_rn222_at_t_meas_i_from_po218_upper = error_propagation_for_one_dimensional_function(
-            f = get_n222rn0_from_detected_218po_decays,
-            x_mean = n_sig_po218,
-            x_lower = n_sig_po218_lower,
-            x_upper = n_sig_po218_upper,
-            param_dict = {"tf":time_window_ps[0]/(10**12), "ti":time_window_ps[1]/(10**12), "R":0, "n218po0":0},
-            n_mc = 10**6,
-            flag_verbose = True)
-        n_rn222_at_t_meas_i_from_po214, n_rn222_at_t_meas_i_from_po214_lower, n_rn222_at_t_meas_i_from_po214_upper = error_propagation_for_one_dimensional_function(
-            f = get_n222rn0_from_detected_214bi_decays,
-            x_mean = n_sig_po214,
-            x_lower = n_sig_po214_lower,
-            x_upper = n_sig_po214_upper,
-            param_dict = {"tf":time_window_ps[0]/(10**12), "ti":time_window_ps[1]/(10**12), "R":0, "n218po0":0, "n214pb0":0, "n214bi0":0},
-            n_mc = 10**6,
-            flag_verbose = True)
-        # for some unknown reason 'get_n222rn0_from_detected_218po_decays' and 'get_n222rn0_from_detected_214bi_decays' sometimes output negative values
-        n_rn222_at_t_meas_i_from_po218 = float(np.sqrt(n_rn222_at_t_meas_i_from_po218**2))
-        n_rn222_at_t_meas_i_from_po218_lower = float(np.sqrt(n_rn222_at_t_meas_i_from_po218_lower**2))
-        n_rn222_at_t_meas_i_from_po218_upper = float(np.sqrt(n_rn222_at_t_meas_i_from_po218_upper**2))
-        n_rn222_at_t_meas_i_from_po214 = float(np.sqrt(n_rn222_at_t_meas_i_from_po214**2))
-        n_rn222_at_t_meas_i_from_po214_lower = float(np.sqrt(n_rn222_at_t_meas_i_from_po214_lower**2))
-        n_rn222_at_t_meas_i_from_po214_upper = float(np.sqrt(n_rn222_at_t_meas_i_from_po214_upper**2))
-        n_rn222_at_t_meas_i_from_po218andpo214 = 0.5*(n_rn222_at_t_meas_i_from_po218 +n_rn222_at_t_meas_i_from_po214) # NOTE: At some point edit this to the actual combined value calculation (i.e., use Mathematica to compute the integral over the sum of both isotope-specific values)
-        n_rn222_at_t_meas_i_from_po218andpo214_lower = n_rn222_at_t_meas_i_from_po214_lower
-        n_rn222_at_t_meas_i_from_po218andpo214_upper = n_rn222_at_t_meas_i_from_po214_upper
-        print(f"n_rn222_at_t_meas_i (po218): {n_rn222_at_t_meas_i_from_po218:.2f}-{n_rn222_at_t_meas_i_from_po218_lower:.2f}+{n_rn222_at_t_meas_i_from_po218_upper:.2f}")
-        print(f"n_rn222_at_t_meas_i (po214): {n_rn222_at_t_meas_i_from_po214:.2f}-{n_rn222_at_t_meas_i_from_po214_lower:.2f}+{n_rn222_at_t_meas_i_from_po214_upper:.2f}")
-        print(f"n_rn222_at_t_meas_i (po218+po214): {n_rn222_at_t_meas_i_from_po218andpo214:.2f}-{n_rn222_at_t_meas_i_from_po218andpo214_lower:.2f}+{n_rn222_at_t_meas_i_from_po218andpo214_upper:.2f}")
-        if "po218" in measurement_data_dict["activity_data_input"]["flag_activity_data"] and "po214" in measurement_data_dict["activity_data_input"]["flag_activity_data"]:
-            n_rn222_at_t_meas_i = n_rn222_at_t_meas_i_from_po218andpo214
-            n_rn222_at_t_meas_i_lower = n_rn222_at_t_meas_i_from_po218andpo214_lower
-            n_rn222_at_t_meas_i_upper = n_rn222_at_t_meas_i_from_po218andpo214_upper
-        elif "po218" in measurement_data_dict["activity_data_input"]["flag_activity_data"]:
-            n_rn222_at_t_meas_i = n_rn222_at_t_meas_i_from_po218
-            n_rn222_at_t_meas_i_lower = n_rn222_at_t_meas_i_from_po218_lower
-            n_rn222_at_t_meas_i_upper = n_rn222_at_t_meas_i_from_po218_upper
-        elif "po214" in measurement_data_dict["activity_data_input"]["flag_activity_data"]:
-            n_rn222_at_t_meas_i = n_rn222_at_t_meas_i_from_po214
-            n_rn222_at_t_meas_i_lower = n_rn222_at_t_meas_i_from_po214_lower
-            n_rn222_at_t_meas_i_upper = n_rn222_at_t_meas_i_from_po214_upper
-        else:
-            raise Exception(f"You did not specify what kind of box counting analysis you'd like to use")
+        if measurement_data_dict["activity_data_input"]["flag_verbose"] == True: print(f"get_activity_data_output_dict(): calculating the number of rn222 atoms present at 't_meas_i'")
+        n_rn222_t_meas_i_po218_mean, n_rn222_t_meas_i_po218_loweruncertainty, n_rn222_t_meas_i_po218_upperuncertainty = error_propagation_for_one_dimensional_function(
+            function = get_n222rn0_from_detected_218po_decays,
+            function_input_dict = {
+                "N_mean" : n_sig_po218_mean,
+                "N_loweruncertainty" : n_sig_po218_loweruncertainty,
+                "N_upperuncertainty" : n_sig_po218_upperuncertainty,
+            },
+            function_parameter_dict = {
+                "tf" : time_window_ps[0]/(10**12),
+                "ti" : time_window_ps[1]/(10**12),
+                "R" : 0,
+                "n218po0" : 0},
+            n_mc = 10**5,
+            n_histogram_bins = 150,
+            flag_verbose = measurement_data_dict["activity_data_input"]["flag_verbose"])
+        n_rn222_t_meas_i_po214_mean, n_rn222_t_meas_i_po214_loweruncertainty, n_rn222_t_meas_i_po214_upperuncertainty = error_propagation_for_one_dimensional_function(
+            function = get_n222rn0_from_detected_214bi_decays,
+            function_input_dict = {
+                "N_mean" : n_sig_po214_mean,
+                "N_loweruncertainty" : n_sig_po214_loweruncertainty,
+                "N_upperuncertainty" : n_sig_po214_upperuncertainty,
+            },
+            function_parameter_dict = {
+                "tf" : time_window_ps[0]/(10**12),
+                "ti" : time_window_ps[1]/(10**12),
+                "R" : 0,
+                "n218po0" : 0,
+                "n218po0" : 0,
+                "n214pb0" : 0,
+                "n214bi0" : 0},
+            n_mc = 10**5,
+            n_histogram_bins = 150,
+            flag_verbose = measurement_data_dict["activity_data_input"]["flag_verbose"])
 
+        # for some unknown reason 'get_n222rn0_from_detected_218po_decays' and 'get_n222rn0_from_detected_214bi_decays' sometimes output negative values
+        n_rn222_t_meas_i_po218_mean = float(np.sqrt(n_rn222_t_meas_i_po218_mean**2))
+        n_rn222_t_meas_i_po218_loweruncertainty = float(np.sqrt(n_rn222_t_meas_i_po218_loweruncertainty**2))
+        n_rn222_t_meas_i_po218_upperuncertainty = float(np.sqrt(n_rn222_t_meas_i_po218_upperuncertainty**2))
+        n_rn222_t_meas_i_po214_mean = float(np.sqrt(n_rn222_t_meas_i_po214_mean**2))
+        n_rn222_t_meas_i_po214_loweruncertainty = float(np.sqrt(n_rn222_t_meas_i_po214_loweruncertainty**2))
+        n_rn222_t_meas_i_po214_upperuncertainty = float(np.sqrt(n_rn222_t_meas_i_po214_upperuncertainty**2))
+
+        # calculating the combined value of n_rn222_t_meas_i (currently the weighted mean of the po218 and po214 numbers)
+        if measurement_data_dict["activity_data_input"]["flag_verbose"] == True: print(f"get_activity_data_output_dict(): combining the rn222 determined for both po218 and po214")
+        n_rn222_t_meas_i_combined_mean, n_rn222_t_meas_i_combined_loweruncertainty, n_rn222_t_meas_i_combined_upperuncertainty= error_propagation_for_one_dimensional_function(
+            function = calc_weighted_mean,
+            function_input_dict = {
+                "n_rn222_0_po218_mean" : n_rn222_t_meas_i_po218_mean,
+                "n_rn222_0_po218_loweruncertainty" : n_rn222_t_meas_i_po218_loweruncertainty,
+                "n_rn222_0_po218_upperuncertainty" : n_rn222_t_meas_i_po218_upperuncertainty,
+                "n_rn222_0_po214_mean" : n_rn222_t_meas_i_po214_mean,
+                "n_rn222_0_po214_loweruncertainty" : n_rn222_t_meas_i_po214_loweruncertainty,
+                "n_rn222_0_po214_upperuncertainty" : n_rn222_t_meas_i_po214_upperuncertainty,
+            },
+            function_parameter_dict = {
+                "n_rn222_0_po218_loweruncertaintyparam" : n_rn222_t_meas_i_po218_loweruncertainty,
+                "n_rn222_0_po218_upperuncertaintyparam" : n_rn222_t_meas_i_po218_upperuncertainty,
+                "n_rn222_0_po214_loweruncertaintyparam" : n_rn222_t_meas_i_po214_loweruncertainty,
+                "n_rn222_0_po214_upperuncertaintyparam" : n_rn222_t_meas_i_po214_upperuncertainty,
+            },
+            n_mc = 10**5,
+            n_histogram_bins = 150,
+            flag_verbose = measurement_data_dict["activity_data_input"]["flag_verbose"])
+
+        #n_rn222_t_meas_i_combined_mean = 0.5*(n_rn222_t_meas_i_po218_mean +n_rn222_t_meas_i_po214_mean)
+        #n_rn222_t_meas_i_combined_loweruncertainty = 0.5*(n_rn222_t_meas_i_po218_loweruncertainty +n_rn222_t_meas_i_po214_loweruncertainty)
+        #n_rn222_t_meas_i_combined_upperuncertainty = 0.5*(n_rn222_t_meas_i_po218_upperuncertainty +n_rn222_t_meas_i_po214_upperuncertainty)
+
+        # deciding whether to use the number obtained from po218, po214, or both (based on whether the po218 and po214 values are compatible with one another)
+        if measurement_data_dict["activity_data_input"]["flag_verbose"] == True: print(f"get_activity_data_output_dict(): deciding whether to use the po218 or the po214 value")
+        d = np.sqrt((n_rn222_t_meas_i_po218_mean -n_rn222_t_meas_i_po214_mean)**2)
+        sd = np.sqrt((0.5*(n_rn222_t_meas_i_po218_loweruncertainty+n_rn222_t_meas_i_po218_upperuncertainty))**2 +(n_rn222_t_meas_i_po214_loweruncertainty+n_rn222_t_meas_i_po214_upperuncertainty)**2)
+        if d/sd < 2:
+            n_rn222_at_t_meas_i_mean = n_rn222_t_meas_i_combined_mean
+            n_rn222_at_t_meas_i_loweruncertainty = n_rn222_t_meas_i_combined_loweruncertainty
+            n_rn222_at_t_meas_i_upperuncertainty = n_rn222_t_meas_i_combined_upperuncertainty
+        else:
+            n_rn222_at_t_meas_i_mean = n_rn222_t_meas_i_po214_mean
+            n_rn222_at_t_meas_i_loweruncertainty = n_rn222_t_meas_i_po214_loweruncertainty
+            n_rn222_at_t_meas_i_upperuncertainty = n_rn222_t_meas_i_po214_upperuncertainty
 
         # extrapolating the equilibrium emanation activity
+        if measurement_data_dict["activity_data_input"]["flag_verbose"] == True: print(f"get_activity_data_output_dict(): extrapolating the equilibrium emanation activity")
         if measurement_data_dict["activity_data_input"]["flag_activity_extrapolation"] == False:
             dt_trans = "NA"
             dt_ema = "NA"
             a_ema = "NA"
-            a_ema_error ="NA" 
+            #a_ema_error ="NA" 
         elif measurement_data_dict["activity_data_input"]["flag_activity_extrapolation"] in ["default"]:
             # retrieving the relevant times from the ELOG timestamps
-            t_ema_i = measurement_data_dict["measurement_information"]["t_ema_i"]
-            t_trans_i = measurement_data_dict["measurement_information"]["t_trans_i"]
-            t_meas_i = measurement_data_dict["measurement_information"]["t_meas_i"]
-            #t_meas_f = measurement_data_dict["measurement_information"]["t_meas_f"]
+            t_ema_i = measurement_data_dict[key_measurement_information]["t_ema_i"]
+            t_trans_i = measurement_data_dict[key_measurement_information]["t_trans_i"]
+            t_meas_i = measurement_data_dict[key_measurement_information]["t_meas_i"]
+            t_meas_f = measurement_data_dict[key_measurement_information]["t_meas_f"]
             # calculating the relevant time deltas
-            #dt_meas = (timestamp_conversion(t_meas_f)-timestamp_conversion(t_meas_i)).total_seconds()
-            dt_meas = time_window_ps[1] /(10**12)
+            dt_meas = (timestamp_conversion(t_meas_f)-timestamp_conversion(t_meas_i)).total_seconds() # only used to be written to output
             dt_ema = (timestamp_conversion(t_trans_i)-timestamp_conversion(t_ema_i)).total_seconds()
             dt_trans = (timestamp_conversion(t_meas_i)-timestamp_conversion(t_trans_i)).total_seconds()
             # calculating the activities
-            a_t_meas_i = n_rn222_at_t_meas_i *isotope_dict["rn222"]["decay_constant"]
-            a_t_meas_i_error = np.sqrt(n_rn222_at_t_meas_i_lower) *isotope_dict["rn222"]["decay_constant"] # NOTE: Still need to implement error propagation for box counting analysis! (maybe already done for sensitivity plot?)
-            # extrapolating from 't_meas_i' to 't_trans_i'
-            a_t_trans_i, a_t_trans_i_error = extrapolate_radon_activity(
-                dt_extrapolation_s = 0,
-                known_activity_at_dt_known_bq = a_t_meas_i,
-                known_dt_s = dt_trans,
-                known_activity_error_at_dt_known_bq = a_t_meas_i_error,
-                flag_exp_rise_or_decay = ["rise", "decay"][1],
-                lambda_222rn = isotope_dict["rn222"]["decay_constant"])
-            # extrapolating from 't_trans_i' to 'inf'
-            a_ema, a_ema_error = extrapolate_radon_activity(
-                dt_extrapolation_s = "inf",
-                known_activity_at_dt_known_bq = a_t_trans_i,
-                known_dt_s = dt_ema,
-                known_activity_error_at_dt_known_bq = a_t_trans_i_error,
-                flag_exp_rise_or_decay = ["rise", "decay"][0],
-                lambda_222rn = isotope_dict["rn222"]["decay_constant"])
+            a_t_meas_i_mean = n_rn222_at_t_meas_i_mean *isotope_dict["rn222"]["decay_constant"]
+            a_t_meas_i_loweruncertainty = n_rn222_at_t_meas_i_loweruncertainty *isotope_dict["rn222"]["decay_constant"]
+            a_t_meas_i_upperuncertainty = n_rn222_at_t_meas_i_upperuncertainty *isotope_dict["rn222"]["decay_constant"]
 
+            # extrapolating the radon activity from 't_meas_i' to 't_trans_i'
+            a_t_trans_i_mean, a_t_trans_i_loweruncertainty, a_t_trans_i_upperuncertainty = error_propagation_for_one_dimensional_function(
+                function = extrapolate_radon_activity,
+                function_input_dict = {
+                    "known_activity_at_dt_known_bq_mean" : a_t_meas_i_mean,
+                    "known_activity_at_dt_known_bq_loweruncertainty" : a_t_meas_i_loweruncertainty,
+                    "known_activity_at_dt_known_bq_upperuncertainty" : a_t_meas_i_upperuncertainty,
+                },
+                function_parameter_dict = {
+                    "flag_exp_rise_or_decay" : ["rise", "decay"][1],
+                    "lambda_222rn" : isotope_dict["rn222"]["decay_constant"],
+                    "known_dt_s" : dt_trans,
+                    "dt_extrapolation_s" : 0,
+                },
+                n_mc = 10**5,
+                n_histogram_bins = 150,
+                flag_verbose = measurement_data_dict["activity_data_input"]["flag_verbose"])
+
+            # extrapolating the radon activity from 't_trans_i' to 'inf'
+            a_ema_withoutdeteffcorr_mean, a_ema_withoutdeteffcorr_loweruncertainty, a_ema_withoutdeteffcorr_upperuncertainty = error_propagation_for_one_dimensional_function(
+                function = extrapolate_radon_activity,
+                function_input_dict = {
+                    "known_activity_at_dt_known_bq_mean" : a_t_trans_i_mean,
+                    "known_activity_at_dt_known_bq_loweruncertainty" : a_t_trans_i_loweruncertainty,
+                    "known_activity_at_dt_known_bq_upperuncertainty" : a_t_trans_i_upperuncertainty,
+                },
+                function_parameter_dict = {
+                    "flag_exp_rise_or_decay" : ["rise", "decay"][0],
+                    "lambda_222rn" : isotope_dict["rn222"]["decay_constant"],
+                    "known_dt_s" : dt_ema,
+                    "dt_extrapolation_s" : "inf",
+                },
+                n_mc = 10**5,
+                n_histogram_bins = 150,
+                flag_verbose = measurement_data_dict["activity_data_input"]["flag_verbose"])
 
         # detection efficiency correction
-        if "detection_efficiency" in [*measurement_data_dict["activity_data_input"]]:
-            a_ema, a_ema_error = error_propagation_a_dividedby_b(
-                a = a_ema,
-                a_error = a_ema_error,
-                b = measurement_data_dict["activity_data_input"]["detection_efficiency"],
-                b_error = measurement_data_dict["activity_data_input"]["detection_efficiency_error"])
-
+        if measurement_data_dict["activity_data_input"]["flag_verbose"] == True: print(f"get_activity_data_output_dict(): detection efficiency correction")
+        if measurement_data_dict["activity_data_input"]["detection_efficiency_mean"] != 1:
+            r_ema_mean, r_ema_loweruncertainty, r_ema_upperuncertainty = error_propagation_for_one_dimensional_function(
+                function = detection_efficiency_correction,
+                function_input_dict = {
+                    "r_ema_mean" : a_ema_withoutdeteffcorr_mean,
+                    "r_ema_loweruncertainty" : a_ema_withoutdeteffcorr_loweruncertainty,
+                    "r_ema_upperuncertainty" : a_ema_withoutdeteffcorr_upperuncertainty,
+                    "detection_efficiency_mean" : measurement_data_dict["activity_data_input"]["detection_efficiency_mean"],
+                    "detection_efficiency_loweruncertainty" : measurement_data_dict["activity_data_input"]["detection_efficiency_loweruncertainty"],
+                    "detection_efficiency_upperuncertainty" : measurement_data_dict["activity_data_input"]["detection_efficiency_upperuncertainty"],
+                },
+                function_parameter_dict = {},
+                n_mc = 10**5,
+                n_histogram_bins = 150,
+                flag_verbose = measurement_data_dict["activity_data_input"]["flag_verbose"])
+        else:
+            r_ema_mean = a_ema_withoutdeteffcorr_mean
+            r_ema_loweruncertainty = a_ema_withoutdeteffcorr_loweruncertainty
+            r_ema_upperuncertainty = a_ema_withoutdeteffcorr_upperuncertainty
 
         # filling the 'activity_data_output_dict'
+        if measurement_data_dict["activity_data_input"]["flag_verbose"] == True: print(f"get_activity_data_output_dict(): filling the 'activity_data_output_dict'")
         activity_data_output_dict = {
             "event_extraction" : {
                 "po218_adcc_window" : [adcc_selection_window_po218_left, adcc_selection_window_po218_right],
                 "po214_adcc_window" : [adcc_selection_window_po214_left, adcc_selection_window_po214_right],
             },
+            "miscellaneous" : {
+                "n_meas_po218" : n_meas_po218,
+                "n_sig_po218" : n_sig_po218_mean,
+                "n_bkg_expected_po218" : n_bkg_expected_po218,
+                "n_meas_po214" : n_meas_po214,
+                "n_sig_po214" : n_sig_po214_mean,
+                "n_bkg_expected_po214" : n_bkg_expected_po214,
+                "n_rn222_t_meas_i_po218_mean" : n_rn222_t_meas_i_po218_mean,
+                "n_rn222_t_meas_i_po218_loweruncertainty" : n_rn222_t_meas_i_po218_loweruncertainty,
+                "n_rn222_t_meas_i_po218_upperuncertainty" : n_rn222_t_meas_i_po218_upperuncertainty,
+                "n_rn222_t_meas_i_po214_mean" : n_rn222_t_meas_i_po214_mean,
+                "n_rn222_t_meas_i_po214_loweruncertainty" : n_rn222_t_meas_i_po214_loweruncertainty,
+                "n_rn222_t_meas_i_po214_upperuncertainty" : n_rn222_t_meas_i_po214_upperuncertainty,
+                "n_rn222_t_meas_i_combined_mean" : n_rn222_t_meas_i_combined_mean,
+                "n_rn222_t_meas_i_combined_loweruncertainty" : n_rn222_t_meas_i_combined_loweruncertainty,
+                "n_rn222_t_meas_i_combined_upperuncertainty" : n_rn222_t_meas_i_combined_upperuncertainty,
+            },
             "activity_extrapolation" : {
-                "dt_trans_s" : dt_trans,
-                "dt_ema_s" : dt_ema,
-                "dt_meas_s" : dt_meas,
-                "a_ema_bq" : a_ema,
-                "a_ema_error_bq" : a_ema_error,
-                "n_meas_214" : n_meas_po214,
-                "n_sig_214" : n_sig_po214,
-                "n_bkg_expected_214" : n_bkg_expected_po214,
+                "delta_t_trans_s" : dt_trans,
+                "delta_t_ema_s" : dt_ema,
+                "delta_t_meas_s" : dt_meas,
+                "r_ema_mean_bq" : r_ema_mean,
+                "r_ema_loweruncertainty_bq" :  r_ema_loweruncertainty,
+                "r_ema_upperuncertainty_bq" :  r_ema_upperuncertainty,
             },
         }
         print(activity_data_output_dict)
@@ -1970,13 +2228,38 @@ def get_activity_data_output_dict(
 # Also I was lazy and just used the Gaussian approximation... I should probably update that at some point in the future.
 def calc_number_of_signal_events(
     n_meas,
-    n_bkg_expected):
+    n_bkg_expected,
+    flag_verbose):
 
-    n_sig = n_meas -n_bkg_expected
-    n_sig_lower = np.sqrt(n_meas +n_bkg_expected)
-    n_sig_upper = np.sqrt(n_meas +n_bkg_expected)
+    # calculating the Poissonian errors of the input measurements
+    n_meas_loweruncertainty, n_meas_upperuncertainty = calc_poissonian_error(
+        number_of_counts = n_meas,
+        flag_mode = ["sqrt", "poissonian", "poissonian_symmetrical"][1])
+    n_bkg_expected_loweruncertainty, n_bkg_expected_upperuncertainty = calc_poissonian_error(
+        number_of_counts = n_bkg_expected,
+        flag_mode = ["sqrt", "poissonian", "poissonian_symmetrical"][1])
 
-    return n_sig, n_sig_lower, n_sig_upper
+    # calculating the error propagation on the number of signal events
+    def sig_is_meas_minus_bkg(n_meas, n_bkg):
+        n_sig = n_meas -n_bkg
+        return n_sig
+    n_sig_mean = sig_is_meas_minus_bkg(n_meas=n_meas, n_bkg=n_bkg_expected)
+    y_mean, n_sig_loweruncertainty, n_sig_upperuncertainty = error_propagation_for_one_dimensional_function(
+        function = sig_is_meas_minus_bkg,
+        function_input_dict = {
+            "n_meas_mean" : n_meas,
+            "n_meas_loweruncertainty" : n_meas_loweruncertainty,
+            "n_meas_upperuncertainty" : n_meas_upperuncertainty,
+            "n_bkg_mean" : n_bkg_expected,
+            "n_bkg_loweruncertainty" : n_bkg_expected_loweruncertainty,
+            "n_bkg_upperuncertainty" : n_bkg_expected_upperuncertainty,
+        },
+        function_parameter_dict = {},
+        n_mc = 10**5,
+        n_histogram_bins = 150,
+        flag_verbose = flag_verbose,
+    )
+    return n_sig_mean, n_sig_loweruncertainty, n_sig_upperuncertainty
 
 
 # This function is used to calculate the expected number of background events, based on the given background data 'raw_data.npy'.
@@ -2142,7 +2425,7 @@ np.exp(np.float128((isotope_dict["po218"]["decay_constant"] + isotope_dict["rn22
 
 # This function is used to calculate the initial number of radon atoms 'n222rn0' by solving the analytical po218 decay model for 'n222rn0'.
 def get_n222rn0_from_detected_218po_decays(
-    N, # number of detected rn222 decays
+    N, # number of detected po218 decays
     tf, # time in seconds at which the data acquisition was stopped, measured after t=0
     ti = 0, # time in seconds at which the data acquisition was stopped, measured after t=0
     R = 0, # radon equilibrium emanation activity
@@ -2702,6 +2985,7 @@ def plot_activity_model_fit(
     plot_annotate_comments_dict = {},
     plot_legend_dict = {},
     # flags
+    flag_plot_fits = True,
     flag_x_axis_units = ["seconds", "radon_half_lives"][1],
     flag_output_abspath_list = [],
     flag_comments = [],
@@ -2713,10 +2997,16 @@ def plot_activity_model_fit(
 
     # figure formatting
     fig, ax1 = plt.subplots(figsize=[plot_figsize_x_inch,plot_figsize_x_inch*plot_aspect_ratio], dpi=150, constrained_layout=True)
-    if plot_x_lim_s == "max" and measurement_data_dict['activity_data_input']["flag_t_meas_ana_s"] == "delta_t_meas":
-        xlim = [0,max(raw_data_ndarray["timestamp_ps"])/(10**12)]
-    elif plot_x_lim_s == "max" and measurement_data_dict['activity_data_input']["flag_t_meas_ana_s"] != "delta_t_meas":
-        xlim = [0,measurement_data_dict['activity_data_input']["flag_t_meas_ana_s"]]
+#    if plot_x_lim_s == "max" and measurement_data_dict['activity_data_input']["flag_t_meas_ana_s"] == "delta_t_meas":
+#        xlim = [0,max(raw_data_ndarray["timestamp_ps"])/(10**12)]
+#    elif plot_x_lim_s == "max" and measurement_data_dict['activity_data_input']["flag_t_meas_ana_s"] != "delta_t_meas":
+#        xlim = [0,measurement_data_dict['activity_data_input']["flag_t_meas_ana_s"]]
+#    else:
+#        xlim = plot_x_lim_s
+    if plot_x_lim_s == []:
+        xlim = measurement_data_dict["activity_data_input"]["delta_t_meas_window_s"]
+        if xlim[1] == "t_meas_f":
+            xlim[1] = max(raw_data_ndarray["timestamp_ps"])/(10**12)
     else:
         xlim = plot_x_lim_s
     if flag_x_axis_units == "seconds":
@@ -2766,28 +3056,29 @@ def plot_activity_model_fit(
             capthick = 0.5)
 
     # plotting the fits
-    for isotope in ["po218", "po214"]:
-        peaknum = [keynum for keynum in [*measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"]] if measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"][keynum]==isotope][0]
+    if flag_plot_fits == True:
+        for isotope in ["po218", "po214"]:
+            peaknum = [keynum for keynum in [*measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"]] if measurement_data_dict["spectrum_data_input"]["a_priori_knowledge"][keynum]==isotope][0]
 
-        fit_function = integral_function_po218 if isotope == "po218" else integral_function_po214
-        x_vals = [ts*time_unit_conversion_factor for ts in fit_plot_x_vals_s]
-        y_vals = fit_function(
-            fit_plot_x_vals_s,
-            measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["n222rn0"],
-            measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["n218po0"],
-            measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["n214pb0"],
-            measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["n214bi0"],
-            measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["r"]
-            )
-        plt.plot(
-            x_vals,
-            y_vals,
-            linewidth = 2,#measurement_data_dict["peak_data"],
-            linestyle = "-",
-            color = isotope_dict[isotope]["color"],
-            alpha = 1,
-            label = isotope_dict[isotope]["latex_label"] +" (fit)",
-            zorder = 30)
+            fit_function = integral_function_po218 if isotope == "po218" else integral_function_po214
+            x_vals = [ts*time_unit_conversion_factor for ts in fit_plot_x_vals_s]
+            y_vals = fit_function(
+                fit_plot_x_vals_s,
+                measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["n222rn0"],
+                measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["n218po0"],
+                measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["n214pb0"],
+                measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["n214bi0"],
+                measurement_data_dict["activity_data_output"]["activity_model_fit_results"][isotope]["r"]
+                )
+            plt.plot(
+                x_vals,
+                y_vals,
+                linewidth = 2,#measurement_data_dict["peak_data"],
+                linestyle = "-",
+                color = isotope_dict[isotope]["color"],
+                alpha = 1,
+                label = isotope_dict[isotope]["latex_label"] +" (fit)",
+                zorder = 30)
 
     # marking as 'preliminary'
     if flag_preliminary == True:
@@ -2808,7 +3099,7 @@ def plot_activity_model_fit(
         if "red_chi_square" in flag_comments:
             comment_list.append(r"$\chi^2_{\mathrm{red}}=" +f"{measurement_data_dict['activity_data_output']['activity_model_fit_results']['reduced_chi_square']:.2f}" +r"$")
         if "amf_rema_result" in flag_comments:
-            comment_list.append(r"${^{\mathrm{AMF}}R}^{\mathrm{ema}}_{^{222}\mathrm{Rn}}=(" +f"{measurement_data_dict['activity_data_output']['activity_extrapolation']['a_ema_bq']*1000:.2f}" +r"\pm" +f"{measurement_data_dict['activity_data_output']['activity_extrapolation']['a_ema_error_bq']*1000:.2f}" +r")\,\mathrm{mBq}$")
+            comment_list.append(r"${^{\mathrm{AMF}}R}^{\mathrm{ema}}_{^{222}\mathrm{Rn}}=(" +f"{measurement_data_dict['activity_data_output']['activity_extrapolation']['r_ema_mean_bq']*1000:.1f}" +r"_{-" +f"{measurement_data_dict['activity_data_output']['activity_extrapolation']['r_ema_loweruncertainty_bq']*1000:.1f}" +r"}^{+" +f"{measurement_data_dict['activity_data_output']['activity_extrapolation']['r_ema_upperuncertainty_bq']*1000:.1f}" +r"})\,\mathrm{mBq}$")
         annotate_comments(
             comment_ax = ax1,
             comment_list = comment_list,

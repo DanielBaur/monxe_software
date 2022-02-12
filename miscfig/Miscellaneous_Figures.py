@@ -506,6 +506,8 @@ def two_tip_arrow(
     zorder=30,
     flag_text="",
     text_offset=(0,0),
+    text_fontsize = 11,
+    text_rotation = 0,
     text_horizontalalignment = "center",
     text_verticalalignment = "center",
     
@@ -537,7 +539,8 @@ def two_tip_arrow(
             horizontalalignment = text_horizontalalignment,
             verticalalignment = text_verticalalignment,
             #transform = ax1.transAxes,
-            #fontsize=11
+            fontsize = text_fontsize,
+            rotation = text_rotation,
         )
     return
 
@@ -1156,9 +1159,9 @@ def plot_vessel(
 #        plot_line(start_tuple=h, end_tuple=e, linewidth=vessel_lw, linecolor=input_linecolor)
         points_list = [g,f,e,h]
         if orientation == 'above':
-            circle_points = plot_circle(center=z, radius=0.5*vessel_width, phicoverage=(0,1), linewidth=vessel_lw, linecolor=input_linecolor, numberofpoints=1000, izorder=input_zorder, flag_plot_circle=False, flag_return_points_list = True)
+            circle_points = plot_circle_2(center=z, radius=0.5*vessel_width, phicoverage=(0,1), linewidth=vessel_lw, linecolor=input_linecolor, numberofpoints=1000, izorder=input_zorder, flag_plot_circle=False, flag_return_points_list = True)
         if orientation == 'below':
-            circle_points = plot_circle(center=z, radius=0.5*vessel_width, phicoverage=(1,2), linewidth=vessel_lw, linecolor=input_linecolor, numberofpoints=1000, izorder=input_zorder, flag_plot_circle=False, flag_return_points_list = True)
+            circle_points = plot_circle_2(center=z, radius=0.5*vessel_width, phicoverage=(1,2), linewidth=vessel_lw, linecolor=input_linecolor, numberofpoints=1000, izorder=input_zorder, flag_plot_circle=False, flag_return_points_list = True)
         points_list = points_list +circle_points
     vessel = patches.Polygon(xy=points_list, closed=True, edgecolor=color_vessel_line, facecolor=color_vessel_fill, linewidth=vessel_lw, zorder=input_zorder)
     ax.add_patch(vessel)
@@ -1187,7 +1190,7 @@ def plot_gas_bottle(ax, r, diameter, height, cap_width, cap_height, linewidth, i
     plot_line(start_tuple=a, end_tuple=b, linewidth=linewidth, linecolor=input_linecolor)
     plot_line(start_tuple=b, end_tuple=c, linewidth=linewidth, linecolor=input_linecolor)
     plot_line(start_tuple=c, end_tuple=d, linewidth=linewidth, linecolor=input_linecolor)
-    plot_circle(center=center, radius=0.5*diameter, phicoverage=(0,1), linewidth=linewidth, linecolor=input_linecolor, numberofpoints=1000, izorder=32)
+    plot_circle_2(center=center, radius=0.5*diameter, phicoverage=(0,1), linewidth=linewidth, linecolor=input_linecolor, numberofpoints=1000, izorder=32)
     cap = patches.Rectangle(xy=vs(r,(-0.5*cap_width,0)), width=cap_width, height=-cap_height-0.3, angle=0.0, linewidth=0.001, edgecolor=input_linecolor, facecolor=input_linecolor, zorder=0)
     ax.add_patch(cap)
     return
@@ -1556,7 +1559,7 @@ isotopes_dict = {
         "t_h" : '$1600\,\mathrm{a}$',
         "t_h_det" : '$1600\,\mathrm{a}$',
         "decay" : 'alpha',
-        "e_alpha" : '$4.9\,\mathrm{MeV}$',
+        "e_alpha" : '$4.8\,\mathrm{MeV}$',
         "e_alpha_det" : '$4.87062\,\mathrm{MeV}$'
     },
 
@@ -1567,7 +1570,7 @@ isotopes_dict = {
         "t_h" : '$3.8\,\mathrm{d}$',
         "t_h_det" : '$3.8232\,\mathrm{d}$',
         "decay" : 'alpha',
-        "e_alpha" : '$5.6\,\mathrm{MeV}$',
+        "e_alpha" : '$5.5\,\mathrm{MeV}$',
         "e_alpha_det" : '$5.5903\,\mathrm{MeV}$'
     },
 
@@ -1578,7 +1581,7 @@ isotopes_dict = {
         "t_h" : '$3.1\,\mathrm{min}$',
         "t_h_det" : '$3.071\,\mathrm{min}$',
         "decay" : 'alpha',
-        "e_alpha" : '$6.1\,\mathrm{MeV}$',
+        "e_alpha" : '$6.0\,\mathrm{MeV}$',
         "e_alpha_det" : '$6.11468\,\mathrm{MeV}$'
     },
 
@@ -1607,7 +1610,7 @@ isotopes_dict = {
         "t_h" : '$162.3\,\mathrm{\mu s}$',
         "t_h_det" : '$162.3\,\mathrm{\mu s}$',
         "decay" : 'alpha',
-        "e_alpha" : '$7.8\,\mathrm{MeV}$',
+        "e_alpha" : '$7.7\,\mathrm{MeV}$',
         "e_alpha_det" : '$7.83346\,\mathrm{MeV}$'
     },
 
@@ -1636,7 +1639,7 @@ isotopes_dict = {
         "t_h" : '$138.4\,\mathrm{d}$',
         "t_h_det" : '$138.3763\,\mathrm{d}$',
         "decay" : 'alpha',
-        "e_alpha" : '$5.4\,\mathrm{MeV}$',
+        "e_alpha" : '$5.3\,\mathrm{MeV}$',
         "e_alpha_det" : '$5.40745\,\mathrm{MeV}$'
     },
 
@@ -1815,6 +1818,7 @@ def plot_decaybox(
     dbhalflifestringstring_offset=(0,0),
     dbboxcolor='cyan',
     dbfs=11,
+    arrowfs=7,
     textcolor="black",
     arrowcolor='black',
     labelcolor='black',
@@ -1825,15 +1829,15 @@ def plot_decaybox(
     # drawing the arrows
     if dictionary["decay"]=="alpha" and flag_plotarrow==True:
         if "br_alpha" in dictionary.keys():
-            plot_alphaarrow(ax=dbax, n=dictionary["n"], z=dictionary["z"], energy=dictionary["e_alpha"], fs=dbfs, arrowcolor=arrowcolor, stringcolor=labelcolor, br=dictionary["br_alpha"])
+            plot_alphaarrow(ax=dbax, n=dictionary["n"], z=dictionary["z"], energy=dictionary["e_alpha"], fs=arrowfs, arrowcolor=arrowcolor, stringcolor=labelcolor, br=dictionary["br_alpha"])
         else:
-            plot_alphaarrow(ax=dbax, n=dictionary["n"], z=dictionary["z"], energy=dictionary["e_alpha"], fs=dbfs, arrowcolor=arrowcolor, stringcolor=labelcolor)
+            plot_alphaarrow(ax=dbax, n=dictionary["n"], z=dictionary["z"], energy=dictionary["e_alpha"], fs=arrowfs, arrowcolor=arrowcolor, stringcolor=labelcolor)
     elif dictionary["decay"]=="beta-" and flag_plotarrow==True:
-        plot_betaarrow(ax=dbax, n=dictionary["n"], z=dictionary["z"], fs=dbfs, arrowcolor=arrowcolor, stringcolor=labelcolor)
+        plot_betaarrow(ax=dbax, n=dictionary["n"], z=dictionary["z"], fs=arrowfs, arrowcolor=arrowcolor, stringcolor=labelcolor)
     elif dictionary["decay"]=="beta+" and flag_plotarrow==True:
-        plot_betaplusarrow(ax=dbax, n=dictionary["n"], z=dictionary["z"], fs=dbfs, arrowcolor=arrowcolor, stringcolor=labelcolor)
+        plot_betaplusarrow(ax=dbax, n=dictionary["n"], z=dictionary["z"], fs=arrowfs, arrowcolor=arrowcolor, stringcolor=labelcolor)
     elif dictionary["decay"]=="" and flag_plotarrow==True:
-        plot_alphaarrow(ax=dbax, n=dictionary["n"], z=dictionary["z"], energy="", fs=dbfs, arrowcolor=arrowcolor, stringcolor=labelcolor, flag_label=False)
+        plot_alphaarrow(ax=dbax, n=dictionary["n"], z=dictionary["z"], energy="", fs=arrowfs, arrowcolor=arrowcolor, stringcolor=labelcolor, flag_label=False)
     # drawing the isotope box
     plot_isotope_box(ax=dbax, n=dictionary["n"], z=dictionary["z"], namestring=dictionary["namestring"], halflifestring=dictionary["t_h"], namestring_offset=dbnamestring_offset, halflifestringstring_offset=dbhalflifestringstring_offset, boxcolor=dbboxcolor, fs=dbfs, col=textcolor)
 
@@ -1851,7 +1855,7 @@ def image_onto_plot(filestring, ax, position, pathstring=input_pathstring, zoom=
     img = mpimg.imread(pathstring +filestring)
     imagebox = OffsetImage(img, zoom=zoom)#, zorder=zorder)
     ab = AnnotationBbox(imagebox, position, frameon=False)
-    ab.set_zorder(zorder)
+    ab.zorder = zorder
     ax.add_artist(ab)
 # EXAMPLE: image_onto_plot(filestring='monxe_logo.png', ax=ax1, position=(80,55), pathstring=input_pathstring, zoom=0.3, zorder=25)
 
