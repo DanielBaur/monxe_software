@@ -217,7 +217,7 @@ isotope_dict = {
         "isotope" : "pb214",
         "half_life_s" : 26.916 *60, # 26.916 min
         "decay_constant" : np.log(2)/(26.916 *60),
-        "color" : "#ff1100", # red
+        "color" : color_uni_red, #"#ff1100", # red
         "latex_label" : r"$^{214}\,\mathrm{Pb}$",
     },
     # bismuth

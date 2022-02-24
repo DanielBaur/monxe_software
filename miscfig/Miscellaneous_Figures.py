@@ -962,7 +962,7 @@ def plot_radon_trap(
 
 
 # This function is used to plot a circle.
-def plot_circle(center=(0,0), radius=1, phicoverage=(0,2), linewidth=2, linecolor='cyan', numberofpoints=1000, x1x2=[(0,0),(0,0)], izorder=2, flag_returnpointsinsteadofdrawing=True):
+def plot_circle(center=(0,0), radius=1, phicoverage=(0,2), linewidth=2, linecolor='cyan', numberofpoints=1000, x1x2=[(0,0),(0,0)], izorder=2, flag_returnpointsinsteadofdrawing=True, ax=""):
     x_list = []
     y_list = []
     # given A: center, radius, phicoverage
@@ -1009,7 +1009,10 @@ def plot_circle(center=(0,0), radius=1, phicoverage=(0,2), linewidth=2, linecolo
             points_list.append((x_list[i], y_list[i]))
         return points_list
     else:
-        plt.plot( x_list, y_list, linewidth=linewidth, color=linecolor, zorder=izorder)
+        if ax=="":
+            plt.plot( x_list, y_list, linewidth=linewidth, color=linecolor, zorder=izorder)
+        else:
+            ax.plot( x_list, y_list, linewidth=linewidth, color=linecolor, zorder=izorder)
         points_list = []
         for i in range(len(x_list)):
             points_list.append((x_list[i], y_list[i]))
