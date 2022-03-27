@@ -42,7 +42,7 @@ relpath_output = "./output/"
 # colors
 uni_blue = '#004A9B'
 uni_red = '#C1002A'
-colorstring_citirok1 = "#007990" # ""
+colorstring_citirok1 = "#007990" # RGB: 0, 120, 144
 colorstring_citirok2 = "#024e7b" # ""
 colorstring_citirok3 = "#024167" # "blue"
 colorstring_citirok4 = "#1d7968" # "green"
@@ -326,6 +326,168 @@ def draw_label_at_foot_of_arrows(
         horizontalalignment = "center",
         verticalalignment = "center")
     return
+
+
+def significant_figure_latex_string(
+    mean, # mean value
+    lower, # lower 68th percentile interval
+    upper, # upper 68th percentile interval
+    n = 1, # number of significant figures of the uncertainty
+    decade_shift = 0, # exponent of a factor of 10, by which the output is modified
+    flag_braces = ["()", "", "[]", "{}"][0], # what braces to use
+    flag_symmetry = [ # display symmetric or asymmetric uncertainty intervals
+        "auto", # depending on whether the displayed interval limits would be symmetric or not, a symmetric syntax is printed or not
+        "asym", # printing asymmetric uncertainty interval limits
+        "sym", # printing symmetric uncertainty interval limits, utilizing the lower uncertainty interval width
+        "none", # printing no uncertainty interval limits at all, this might be useful to determine the precision-respecting representation of a number of integer counts
+        "single_number", # printing no uncertainty interval limits, instead making uncertain figures zero,  this might be useful to determine the precision-respecting representation of a number of integer counts
+        "single_number_auto", # printing no uncertainty interval limits, instead making uncertain figures zero and decade-shift correspondingly,  this might be useful to determine the precision-respecting representation of a number of integer counts
+    ][0], # default is 'auto'
+    flag_display_decade_shift = [False,True][0], # flag indicating whether or not the decade shift is printed
+):
+    """
+    This function is used to determine the representation of a measurement value, given as mean and lower/upper uncertainty intervals, in terms of significant figures.
+    The output is a latex-formatted string that I use to annotate plots.
+    NOTE: This function assumes that the lower uncertainty interval width is lower than that of the upper uncertainty interval.
+    general: https://www.physics.uoguelph.ca/significant-digits-tutorial#:~:text=Zeroes%20placed%20before%20other%20digits,7.90%20has%20three%20significant%20digits.
+    general: https://www2.southeastern.edu/Academics/Faculty/rallain/plab194/error.html#:~:text=Uncertainties%20are%20almost%20always%20quoted,example%3A%20%C2%B10.0012%20kg).&text=Always%20round%20the%20experimental%20measurement,decimal%20place%20as%20the%20uncertainty.
+    """
+
+    # initializing variables
+    m = float(mean)/(10**decade_shift)
+    l = float(lower)/(10**decade_shift)
+    u = float(upper)/(10**decade_shift)
+
+    # writing 'lower' as: 'figures_before_delimiter' +'.' +'sandwiched_zeros_after_delimiter' +'non_zero_figures_after_sandwiched_zeros'
+    figures_before_delimiter = list(str(l).split("."))[0] # no unsignificant leading zeroes since l is of type 'float'
+    figures_after_delimiter = list(str(l).split("."))[1] # no unsignificant trailing zeroeas since l is of type 'float'
+    sandwiched_zeros_after_delimiter = "0"*(len(figures_after_delimiter) -len(figures_after_delimiter.lstrip("0")))
+    non_zero_figures_after_sandwiched_zeros = figures_after_delimiter.lstrip("0")
+    n_significant_figures_before_delimiter = len(figures_before_delimiter) if figures_before_delimiter!="0" else 0
+    n_insignificant_figures_after_delimiter = len(sandwiched_zeros_after_delimiter) if n_significant_figures_before_delimiter==0 else 0
+    n_significant_figures_after_delimiter = len(figures_after_delimiter) -n_insignificant_figures_after_delimiter
+
+    # determining the number of decimals to be printed
+    if n_significant_figures_before_delimiter==0:
+        if n_insignificant_figures_after_delimiter==0:
+            n_decimals = n
+        elif n_insignificant_figures_after_delimiter>0:
+            n_decimals = n_insignificant_figures_after_delimiter +n
+    elif n_significant_figures_before_delimiter>0:
+        n_decimals = n -n_significant_figures_before_delimiter
+        
+    # manual decade shift
+    #m = m*(10**decade_shift)
+    #l = l*(10**decade_shift)
+    #u = u*(10**decade_shift)
+    #n_decimals -= decade_shift
+    
+    # case: n_decimals < 0
+    force_decade_shift = decade_shift
+    if n_decimals<0:
+        #while n_decimals<0:
+        #    n_decimals+=1
+        #    force_decade_shift += 1
+        raise Exception(f"sfls(): case catch: the number of specified significant figures of the uncertainty ('n'={n}) is smaller than the number of digits before the decimal point ({n_significant_figures_before_delimiter}), even after the decade shift ('decade_shift'={decade_shift})")
+        #print(f"sfls(): case catch: the number of specified significant figures of the uncertainty ('n'={n}) is smaller than the number of digits before the decimal point ({n_significant_figures_before_delimiter}), even after the decade shift ('decade_shift'={decade_shift})")
+        #print(f"sfls(): => forcefully increasing decimal shift by '{force_decade_shift-decade_shift}' orders of magnitude (was '{decade_shift}', now '{force_decade_shift}')")
+        
+    # printing the constituent strings
+    m_string = f"{m:.{n_decimals}f}"
+    l_string = f"{l:.{n_decimals}f}"
+    u_string = f"{u:.{n_decimals}f}"
+    decade_shift_string = "" if flag_display_decade_shift==False else r" \cdot 10^{" +f"{force_decade_shift:.0f}" +"}"
+    if flag_braces=="":
+        braces_string_left = r""
+        braces_string_right = r""
+    elif flag_braces=="()":
+        braces_string_left = r"\left("
+        braces_string_right = r"\right)"
+    elif flag_braces=="[]":
+        braces_string_left = r"\left["
+        braces_string_right = r"\right]"
+    elif flag_braces=="{}":
+        braces_string_left = r"\left{}"
+        braces_string_right = r"\right}"
+    else:
+        raise Exception(f"invalid argument for keyword 'flag_br': {flag_br}")
+
+    # case: only one significant figure which is equal to one
+    if l_string[-1]=="1":
+        print(f"sfls(): case catch: last significant digit of uncertainty is '1'")
+        print(f"sfls(): => increasing number of significant figures by one")
+        n_decimals += 1
+        m_string = f"{m:.{n_decimals}f}"
+        l_string = f"{l:.{n_decimals}f}"
+        u_string = f"{u:.{n_decimals}f}"
+        
+    # catch: no decade shift output but non-zero value of 'decade_shift'
+    if flag_display_decade_shift==False and decade_shift!=0:
+        print(f"sfls(): WARNING: you chose to print no decade shift though 'decade_shift'={decade_shift}")
+
+    # catch: no braces despite 'flag_display_decade_shift' being 'True'
+    if flag_display_decade_shift==True and flag_braces=="":
+        print(f"sfls(): WARNING: you chose to not print braces though 'flag_display_decade_shift'={flag_display_decade_shift}")
+
+    # case: 'flag_symmetry'=='singel_number_auto'
+    if flag_symmetry=='single_number_auto':
+        # determining which index of 'm_string' is uncertain due to the value of 'l_string'
+        highest_non_zero_uncertainty_index = len(l_string) -min([l_string.index(non_zero_val) for non_zero_val in l_string.replace("0","").replace(".","")])
+        if int(l_string[-highest_non_zero_uncertainty_index])<5:
+            round_index = highest_non_zero_uncertainty_index
+        else:
+            if m_string[-(highest_non_zero_uncertainty_index+1)]==".":
+                round_index = highest_non_zero_uncertainty_index +2
+            else:
+                round_index = highest_non_zero_uncertainty_index +1
+        # setting all undetermined digits to zero and rounding the 'round_index'ed number
+        m_list = list(m_string)
+        if m_list[-round_index+1] == ".":
+            round_check_digit = int(m_list[-round_index+2])
+        else:
+            round_check_digit = int(m_list[-round_index+1])
+        if round_check_digit>=5:
+            if m_list[-round_index]==9:
+                m_list[-round_index] = "0"
+                m_list[-(round_index+1)] = str(int(m_list[-(round_index+1)])+1)
+            else:
+                m_list[-round_index] = str(int(m_list[-round_index])+1)
+        m_list_rounded = [m_list[i] if (i<=len(m_list)-round_index or m_list[i]==".") else "0" for i in range(len(m_list))]
+        m_string = "".join(m_list_rounded)
+        # determining the decade shift exponent
+        figures_before_delimiter = list(str(m_string).split("."))[0] # no unsignificant leading zeroes since l is of type 'float'
+        figures_after_delimiter = list(str(m_string).split("."))[1] # no unsignificant trailing zeroeas since l is of type 'float'
+        sandwiched_zeros_after_delimiter = "0"*(len(figures_after_delimiter) -len(figures_after_delimiter.lstrip("0")))
+        non_zero_figures_after_sandwiched_zeros = figures_after_delimiter.lstrip("0")
+        n_significant_figures_before_delimiter = len(figures_before_delimiter) if figures_before_delimiter!="0" else 0
+        n_insignificant_figures_after_delimiter = len(sandwiched_zeros_after_delimiter) if n_significant_figures_before_delimiter==0 else 0
+        n_significant_figures_after_delimiter = len(figures_after_delimiter) -n_insignificant_figures_after_delimiter
+        if n_significant_figures_before_delimiter>0:
+            decade_shift_exponent = n_significant_figures_before_delimiter-1
+        else:
+            decade_shift_exponent = n_insignificant_figures_after_delimiter +1
+        m_string = str(float(m_string)/(10**decade_shift_exponent))
+        decade_shift_string = "" if decade_shift_exponent==0 else r" \cdot 10^{" +f"{decade_shift_exponent}" +"}"
+
+    # setting the 'uncertainty' syntax
+    if flag_symmetry=="asym":
+        uncertainty_string = r"_{-" +l_string +r"}^{+" +u_string +r"}"
+    elif flag_symmetry=="sym":
+        uncertainty_string = r"\pm " +l_string
+    elif flag_symmetry in ["single_number_auto", "none"]:
+        uncertainty_string = r""
+    elif flag_symmetry=="auto":
+        if l_string == u_string:
+            uncertainty_string = r"\pm " +l_string
+        else:
+            uncertainty_string = r"_{-" +l_string +r"}^{+" +u_string +r"}"
+    else:
+        raise Exception(f"invalid argument for keyword 'flag_symmetry': {flag_symmetry}")
+
+    # piecing together the output string
+    sig_fig_latex_string = r"$" +braces_string_left +m_string +uncertainty_string +braces_string_right +decade_shift_string +r"$"
+
+    return sig_fig_latex_string
 
 
 # This function is used to plot a line from one 2tuple to another.
