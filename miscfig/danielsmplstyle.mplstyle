@@ -54,7 +54,7 @@
 ##############################################################################################
 
 
-text.latex.preamble: \usepackage{amsmath}
+text.latex.preamble: \usepackage{amsmath} \usepackage[T1]{fontenc} \usepackage{fontawesome}
 text.usetex:        True
 
 

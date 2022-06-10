@@ -42,6 +42,7 @@ relpath_output = "./output/"
 # colors
 uni_blue = '#004A9B'
 uni_red = '#C1002A'
+colorstring_gemsemint = "#5a8fa3"
 colorstring_citirok1 = "#007990" # RGB: 0, 120, 144
 colorstring_citirok2 = "#024e7b" # ""
 colorstring_citirok3 = "#024167" # "blue"
@@ -672,7 +673,6 @@ def two_tip_arrow(
     text_rotation = 0,
     text_horizontalalignment = "center",
     text_verticalalignment = "center",
-    
 ):
     center_point = vs(input_points_list[0], (0.5*(input_points_list[1][0]-input_points_list[0][0]),0.5*(input_points_list[1][1]-input_points_list[0][1])))
     plot_arrow_connect_points(
