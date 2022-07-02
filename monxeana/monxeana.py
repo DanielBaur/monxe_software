@@ -291,6 +291,10 @@ def detection_efficiency_correction(r_ema, detection_efficiency):
     return r_ema/detection_efficiency
 
 
+def difference_of_two_measurement_values(minuend, subtrahend):
+    return minuend - subtrahend
+
+
 # This function is used to convert a datestring (as I defined it, e.g. '20200731') into a format that can be handled by 'datetime'.
 def mod_datetimestring(input_string):
     y = input_string[2:4]
