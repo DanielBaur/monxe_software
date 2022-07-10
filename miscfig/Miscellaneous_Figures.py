@@ -702,6 +702,7 @@ def two_tip_arrow(
             verticalalignment = text_verticalalignment,
             #transform = ax1.transAxes,
             fontsize = text_fontsize,
+            zorder = zorder,
             rotation = text_rotation,
         )
     return
