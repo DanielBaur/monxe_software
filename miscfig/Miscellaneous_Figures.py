@@ -14,6 +14,7 @@ import pprint
 import os
 import random
 from scipy.optimize import curve_fit
+from scipy import ndimage
 from matplotlib.ticker import AutoMinorLocator
 import matplotlib.patches as patches
 from PIL import Image, ImageDraw, ImageFont
@@ -90,6 +91,30 @@ def proplinfunc(x, m, t):
     return m*x +t
 
     
+def get_y_from_x_on_parabola(x,xy_vertex,xy_ref):
+    """
+    This function returns the y value of a parabola with vertex 'xy_vertex' and reference point 'xy_ref' for a given x-value 'x'.
+    reminder: y = const *(x-x_vertex)^2 +y_vertex
+    """
+    const = (xy_ref[1]-xy_vertex[1])/(xy_ref[0]-xy_vertex[0])**2
+    return const *(x-xy_vertex[0])**2 +xy_vertex[1]
+
+        
+# biased: data generation
+def get_vertex_y_from_m_on_parabola(
+    m,
+    x_vertex,
+    xy_ref,
+):
+    """
+    This function returns the y-value of the vertex point of a parabola for a specified reference point on the wanted parabola 'xy_ref' and the slope at that point 'm'.
+    reminder: y = const *(x-x_vertex)^2 +y_vertex
+    """
+    c = 0.5*m/(xy_ref[0]-x_vertex)
+    y_vertex = xy_ref[1] -(c*(xy_ref[0]-x_vertex)**2)
+    return y_vertex, c
+
+
 # This function is used to retrieve m and t from a function of the form y=m*(1/x)+t.
 # Therefore two points (x_1,y_1), (x_2, y_2) lying on the graph are required.
 def get_m_and_t_from_invproplinfunc(y_1, x_1, y_2, x_2):
@@ -569,6 +594,67 @@ def annotate_image_with_arrow(
     return
 
 
+# This function is used to calculate the sector of an ellipse given by two points.
+# Returns the ellipse arc points (from p1 to p2) as plottable x- and y-lists.
+# reminder: x**2/a**2 + y**2/b**2 = 1
+def calc_ellipse_sector_points_list(p1, p2, sector=["bottom", "top"][0], nx=100, flag_verbose=False):
+
+    # computing parameters of ellipse around origin
+    a = np.sqrt((p2[0]-p1[0])**2)
+    b = np.sqrt((p2[1]-p1[1])**2)
+    upper = p1 if p1[1]>p2[1] else p2
+    lower = p1 if p1[1]<p2[1] else p2
+    left = p1 if p1[0]<p2[0] else p2
+    right = p1 if p1[0]>p2[0] else p2
+    if (left==p1 and lower==p1 and sector=="top") or (left==p2 and lower==p2 and sector=="top"):
+        wedge = "top left"
+    elif (left==p1 and lower==p2 and sector=="top") or (left==p2 and lower==p1 and sector=="top"):
+        wedge = "top right"
+    elif (left==p1 and lower==p2 and sector=="bottom") or (left==p2 and lower==p1 and sector=="bottom"):
+        wedge = "bottom left"
+    elif (left==p1 and lower==p1 and sector=="bottom") or (left==p2 and lower==p2 and sector=="bottom"):
+        wedge = "bottom right"
+    if flag_verbose:
+        print(f"a = {a}")
+        print(f"b = {b}")
+        print(f"upper = {upper}")
+        print(f"lower = {lower}")
+        print(f"left = {left}")
+        print(f"right = {right}")
+        print(f"wedge = {wedge}")
+
+    # computing x- and y-list for ellipse around orign
+    if wedge in ["top left", "bottom left"]:
+        x_list = np.linspace(start=-a, stop=0, num=nx, endpoint=True)
+    elif wedge in ["top right", "bottom right"]:
+        x_list = np.linspace(start=0, stop=a, num=nx, endpoint=True)
+    y_list = [np.sqrt((1-(x**2/a**2))*(b**2)) for x in x_list]
+    if "bottom" in wedge : y_list = [-y for y in y_list]
+
+    # computing the center point
+    if sector=="top":
+        if p1==upper:
+            x_center = p1[0]
+            y_center = p2[1]
+        elif p1==lower:
+            x_center = p2[0]
+            y_center = p1[1]
+    elif sector=="bottom":
+        if p1==upper:
+            x_center = p2[0]
+            y_center = p1[1]
+        elif p1==lower:
+            x_center = p1[0]
+            y_center = p2[1]
+    if flag_verbose: print(f"\ncenter point = [{x_center,y_center}]")
+
+    # correcting for center position
+    x_list = [x+x_center for x in x_list]
+    y_list = [y+y_center for y in y_list]
+
+    return x_list, y_list
+
+
 # This function is used to draw an arrow from a list of points
 def plot_arrow_connect_points(
     ax,
@@ -579,16 +665,29 @@ def plot_arrow_connect_points(
     tip_length,
     linestyle = "-",
     flag_single_connections = True,
-    input_zorder = 30):
+    input_zorder = 30,
+    flag_correct_tip_size_for_non_equal_axes = False,
+    flag_ignore_last_n_points = 0,):
 
     # modifying the last point in the list so the tip of the arrow tip ends at the last point in 'points_list'
     line_points = points_list[:-1]
     recessed_point = scale_vec(norm_vec(two_tuple_vector=vs(points_list[len(points_list)-1], (-points_list[len(points_list)-2][0], -points_list[len(points_list)-2][1]))), tip_length)
     line_points.append(vs(points_list[len(points_list)-1], (-recessed_point[0], -recessed_point[1])))
+    if flag_ignore_last_n_points != 0: line_points = line_points[:-flag_ignore_last_n_points]
+    # correcting for non-equal axis scaling
+    if flag_correct_tip_size_for_non_equal_axes == True:
+        figW, figH = ax.get_figure().get_size_inches()
+        _, _, w, h = ax.get_position().bounds
+        disp_ratio = (figH * h) / (figW * w)
+        data_ratio = (ax.get_ylim()[1]-ax.get_ylim()[0]) / (ax.get_xlim()[1]-ax.get_xlim()[0])
+        rr = disp_ratio/data_ratio
+    else:
+        rr = 1
     # generating the points forming the tip of the arrow
     tip_endpoint = points_list[len(points_list)-1]
     tip_center = line_points[len(line_points)-1]
     n = norm_orth_vec(p1=tip_center, p2=tip_endpoint)
+    n = [n[0], n[1]/rr]
     tip_left_point = vs(tip_center, scale_vec(n, 0.5*tip_width))
     tip_right_point = vs(tip_center, scale_vec(n, -0.5*tip_width))
     tip_points = [tip_endpoint, tip_left_point, tip_right_point]
@@ -630,7 +729,8 @@ def plot_box_with_multiline_text(
         linecolor = box_edgecolor,
         flag_connect_last_with_first = True,
         flag_single_connections = True,
-        input_zorder = box_zorder)
+        input_zorder = box_zorder,
+        input_ax = ax)
 
     # printing the text
     textposlist = [vs(box_center, (0, -n*text_verticalspacing +(len(text_stringlist)-1)*text_verticalspacing*0.5)) for n in range(len(text_stringlist))]
@@ -847,6 +947,133 @@ def rotate_two_tuple_around_two_tuple(ptr, angle, cor):
     h_rot = (h[0]*np.cos(alpha)-h[1]*np.sin(alpha),h[0]*np.sin(alpha)+h[1]*np.cos(alpha))
     h_rot_trans = (h_rot[0]+cor[0],h_rot[1]++cor[1])
     return h_rot_trans
+
+
+def draw_sign_inscribed_into_circle(
+    ax,
+    circle_center,
+    circle_radius,
+    circle_linewidth = 0.5,
+    circle_linesstyle = "-",
+    circle_zorder = 1,
+    circle_fillcolor = "white",
+    circle_linecolor = "black",
+    sign_sign = ["+", "-"][0],
+    sign_width_rel_to_radius = 0.8,
+    sign_linewidth = 0.5,
+    sign_linestyle = "-",
+    sign_zorder = 1,
+    sign_linecolor = "black",
+):
+
+    """
+    This function is used to draw a charge, i.e., a circle with either a plus or a minus sign inscribed into it.
+    """
+
+    # adjust for axis display and data ratios (see: https://stackoverflow.com/questions/41597177/get-aspect-ratio-of-axes)
+    figW, figH = ax.get_figure().get_size_inches()
+    _, _, w, h = ax.get_position().bounds
+    disp_ratio = (figH * h) / (figW * w)
+    data_ratio = (ax.get_ylim()[1]-ax.get_ylim()[0]) / (ax.get_xlim()[1]-ax.get_xlim()[0])
+    rr = disp_ratio/data_ratio
+    print(w, h, disp_ratio, data_ratio, rr)
+
+    # drawing the circle (which is an ellipse with width and heighta adjusted to match the figure aspect and data ratio)
+    circle = patches.Ellipse(
+        xy = circle_center,
+        width = circle_radius,
+        height = circle_radius/rr,
+        facecolor = circle_fillcolor,
+        zorder = circle_zorder,
+        edgecolor = circle_linecolor,
+        linewidth = circle_linewidth)
+    ax.add_patch(circle)
+    
+    # drawing the inscribed sign
+    sign_plot_list = [[
+        [circle_center[0]-0.5*sign_width_rel_to_radius*circle_radius, circle_center[0]+0.5*sign_width_rel_to_radius*circle_radius],
+        [circle_center[1], circle_center[1]],
+        ],]
+    if sign_sign == "+":
+        sign_plot_list.append([
+            [circle_center[0], circle_center[0]],
+            [circle_center[1]-0.5*sign_width_rel_to_radius*circle_radius, circle_center[1]+0.5*sign_width_rel_to_radius*circle_radius],
+        ])
+    for line in sign_plot_list:
+        ax.plot(
+            line[0],
+            line[1],
+            linestyle = sign_linestyle,
+            zorder = sign_zorder,
+            linewidth = sign_linewidth,
+            color = sign_linecolor,)
+    y_lim = ax.get_ylim()
+    x_lim = ax.get_xlim()
+    return
+
+
+def draw_sign_inscribed_into_square(
+    ax,
+    square_center,
+    square_edgelength,
+    square_linewidth = 0.5,
+    square_linesstyle = "-",
+    square_zorder = 1,
+    square_fillcolor = "white",
+    square_linecolor = "black",
+    sign_sign = ["+", "-"][0],
+    sign_width_rel_to_radius = 0.8,
+    sign_linewidth = 0.5,
+    sign_linestyle = "-",
+    sign_zorder = 1,
+    sign_linecolor = "black",
+):
+
+    """
+    This function is used to draw a charge, i.e., a circle with either a plus or a minus sign inscribed into it.
+    """
+
+    # adjust for axis display and data ratios (see: https://stackoverflow.com/questions/41597177/get-aspect-ratio-of-axes)
+    figW, figH = ax.get_figure().get_size_inches()
+    _, _, w, h = ax.get_position().bounds
+    disp_ratio = (figH * h) / (figW * w)
+    data_ratio = (ax.get_ylim()[1]-ax.get_ylim()[0]) / (ax.get_xlim()[1]-ax.get_xlim()[0])
+    rr = disp_ratio/data_ratio
+    print(w, h, disp_ratio, data_ratio, rr)
+
+    # drawing the square (which is a rectangle with width and heighta adjusted to match the figure aspect and data ratio)
+#    cap = patches.Rectangle(xy=vs(r,(-0.5*cap_width,0)), width=cap_width, height=-cap_height-0.3, angle=0.0, linewidth=0.001, edgecolor=input_linecolor, facecolor=input_linecolor, zorder=0)
+    circle = patches.Rectangle(
+        xy = vs(square_center, [-0.5*square_edgelength, -0.5*square_edgelength/rr]),
+        width = square_edgelength,
+        height = square_edgelength/rr,
+        facecolor = square_fillcolor,
+        zorder = square_zorder,
+        edgecolor = square_linecolor,
+        linewidth = square_linewidth)
+    ax.add_patch(circle)
+    
+    # drawing the inscribed sign
+    sign_plot_list = [[
+        [square_center[0]-0.5*sign_width_rel_to_radius*square_edgelength, square_center[0]+0.5*sign_width_rel_to_radius*square_edgelength],
+        [square_center[1], square_center[1]],
+        ],]
+    if sign_sign == "+":
+        sign_plot_list.append([
+            [square_center[0], square_center[0]],
+            [square_center[1]-0.5*sign_width_rel_to_radius*square_edgelength, square_center[1]+0.5*sign_width_rel_to_radius*square_edgelength],
+        ])
+    for line in sign_plot_list:
+        ax.plot(
+            line[0],
+            line[1],
+            linestyle = sign_linestyle,
+            zorder = sign_zorder,
+            linewidth = sign_linewidth,
+            color = sign_linecolor,)
+    y_lim = ax.get_ylim()
+    x_lim = ax.get_xlim()
+    return
 
 
 # function to plot a valve into an image
@@ -2017,12 +2244,16 @@ def plot_decaybox(
 
 
 # function to annotate a png image onto a plot
-def image_onto_plot(filestring, ax, position, pathstring=input_pathstring, zoom=1, zorder=2):
+def image_onto_plot(filestring, ax, position, pathstring=input_pathstring, zoom=1, rotation=0, zorder=2):
     img = mpimg.imread(pathstring +filestring)
+    if rotation != 0:
+        img = ndimage.rotate(img, rotation)
     imagebox = OffsetImage(img, zoom=zoom)#, zorder=zorder)
     ab = AnnotationBbox(imagebox, position, frameon=False)
     ab.zorder = zorder
+    ab.rotation = 90
     ax.add_artist(ab)
+    return
 # EXAMPLE: image_onto_plot(filestring='monxe_logo.png', ax=ax1, position=(80,55), pathstring=input_pathstring, zoom=0.3, zorder=25)
 
 
